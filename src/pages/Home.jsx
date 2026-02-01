@@ -170,7 +170,7 @@ export default function Home() {
               <div style={styles.heroActions}>
                 <button
                   type="button"
-                  onClick={() => navigate("/teacher")}
+                  onClick={() => navigate("/host")}
                   onMouseEnter={() => setBtnHover("teacher")}
                   onMouseLeave={() => setBtnHover(null)}
                   style={{

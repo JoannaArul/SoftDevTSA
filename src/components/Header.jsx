@@ -12,8 +12,8 @@ const COLORS = {
 
 const NAV_LINKS = [
   { to: "/", label: "Home" },
-  { to: "/our-mission", label: "Our Mission" },
-  { to: "/teacher", label: "Teacher" },
+  { to: "/why-us", label: "Why us?"},
+  { to: "/host", label: "Host" },
   { to: "/join", label: "Join" },
 ];
 
