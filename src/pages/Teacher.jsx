@@ -21,6 +21,38 @@ function makeCode() {
   return out;
 }
 
+async function uploadPdfToRoom(file, code, numPages) {
+  const form = new FormData();
+  form.append("pdf", file);
+  const res = await fetch(
+    `http://localhost:5174/upload?code=${encodeURIComponent(code)}&numPages=${encodeURIComponent(
+      String(numPages || 0)
+    )}`,
+    { method: "POST", body: form }
+  );
+  if (!res.ok) throw new Error("upload failed");
+  return res.json();
+}
+
+function wsSend(ws, obj) {
+  if (!ws || ws.readyState !== 1) return;
+  try {
+    ws.send(JSON.stringify(obj));
+  } catch {}
+}
+
+const waitForStableBox = (el, tries = 18) =>
+  new Promise((resolve) => {
+    const tick = (t) => {
+      const w = el?.clientWidth || 0;
+      const h = el?.clientHeight || 0;
+      if (w > 240 && h > 240) return resolve({ w, h });
+      if (t <= 0) return resolve({ w, h });
+      requestAnimationFrame(() => tick(t - 1));
+    };
+    tick(tries);
+  });
+
 export default function Teacher() {
   const fileInputRef = useRef(null);
   const viewportRef = useRef(null);
@@ -33,9 +65,13 @@ export default function Teacher() {
   const mediaRecorderRef = useRef(null);
   const chunkTimerRef = useRef(null);
   const wsRef = useRef(null);
+  const isStoppingRef = useRef(false);
+  const lastTxRef = useRef(0);
 
   const [mounted, setMounted] = useState(false);
   const [isNarrow, setIsNarrow] = useState(false);
+  const [isShort, setIsShort] = useState(false);
+
   const [dragOver, setDragOver] = useState(false);
   const [pdfName, setPdfName] = useState("");
   const [pdfDoc, setPdfDoc] = useState(null);
@@ -43,12 +79,16 @@ export default function Teacher() {
   const [page, setPage] = useState(1);
   const [loadingPdf, setLoadingPdf] = useState(false);
   const [rendering, setRendering] = useState(false);
-  const [err, setErr] = useState("");
+
+  const [pdfErr, setPdfErr] = useState("");
+  const [wsErr, setWsErr] = useState("");
+
   const [micOn, setMicOn] = useState(false);
   const [captionMode, setCaptionMode] = useState("local");
   const [transcriptText, setTranscriptText] = useState("");
   const [captionStatus, setCaptionStatus] = useState("");
-  const [joinCode, setJoinCode] = useState("");
+
+  const [joinCode, setJoinCode] = useState(() => makeCode());
   const [copied, setCopied] = useState(false);
   const [joinModalOpen, setJoinModalOpen] = useState(false);
   const [studentCount, setStudentCount] = useState(0);
@@ -56,30 +96,115 @@ export default function Teacher() {
 
   const TRANSCRIBE_URL = "http://localhost:5174/transcribe";
 
-  const transcript = useMemo(() => {
-    if (transcriptText) return transcriptText;
-    if (captionStatus) return captionStatus;
-    return pdfDoc
-      ? "Turn on your mic to start live captions."
-      : "Upload a PDF to start your lesson. Captions and transcript will appear here.";
-  }, [pdfDoc, transcriptText, captionStatus]);
-
   useEffect(() => {
     const t = requestAnimationFrame(() => setMounted(true));
     return () => cancelAnimationFrame(t);
   }, []);
 
   useEffect(() => {
-    const mq = window.matchMedia("(max-width: 980px)");
-    const onChange = () => setIsNarrow(!!mq.matches);
-    onChange();
-    if (mq.addEventListener) mq.addEventListener("change", onChange);
-    else mq.addListener(onChange);
-    return () => {
-      if (mq.removeEventListener) mq.removeEventListener("change", onChange);
-      else mq.removeListener(onChange);
+    const calc = () => {
+      const h = window.innerHeight || 0;
+      const w = window.innerWidth || 0;
+      setIsShort(h < 760);
+      setIsNarrow(w < 1024);
     };
+    calc();
+    window.addEventListener("resize", calc, { passive: true });
+    return () => window.removeEventListener("resize", calc);
   }, []);
+
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const onKey = (e) => {
+      if (e.key === "Escape") setIsFullscreen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isFullscreen]);
+
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev || "";
+    };
+  }, [isFullscreen]);
+
+  const maybeBroadcastTranscript = (text) => {
+    const now = Date.now();
+    if (now - lastTxRef.current < 250) return;
+    lastTxRef.current = now;
+    wsSend(wsRef.current, { type: "transcript", text });
+  };
+
+  const transcript = useMemo(() => {
+    if (transcriptText) return transcriptText;
+    if (captionStatus) return captionStatus;
+    if (wsErr && !pdfDoc) return "Ready. Upload slides to begin.";
+    return pdfDoc
+      ? "Turn on your mic to start live captions."
+      : "Upload slides to start. Live captions and transcript will appear here.";
+  }, [pdfDoc, transcriptText, captionStatus, wsErr]);
+
+  const connectRoom = (code) => {
+    try {
+      wsRef.current?.close();
+    } catch {}
+    wsRef.current = null;
+    if (!code) return;
+
+    setWsErr("");
+
+    try {
+      const ws = new WebSocket(`ws://localhost:5174/ws?code=${encodeURIComponent(code)}&role=teacher`);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        setWsErr("");
+        wsSend(ws, { type: "presence", role: "teacher" });
+        if (pdfDoc) wsSend(ws, { type: "slide", page, numPages });
+      };
+
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data || "{}");
+          if (msg?.type === "presence" && typeof msg?.count === "number") setStudentCount(msg.count);
+        } catch {}
+      };
+
+      ws.onclose = () => {
+        if (wsRef.current === ws) wsRef.current = null;
+      };
+
+      ws.onerror = () => {
+        setWsErr("Session server connection issue.");
+      };
+    } catch {
+      setWsErr("Couldn't connect to session server.");
+    }
+  };
+
+  useEffect(() => {
+    if (!joinCode) return;
+    connectRoom(joinCode);
+    return () => {
+      try {
+        wsRef.current?.close();
+      } catch {}
+      wsRef.current = null;
+    };
+  }, [joinCode]);
+
+  const broadcastSlide = (code, pageNum, total) => {
+    const ws = wsRef.current;
+    if (!code || !ws || ws.readyState !== 1) return;
+    wsSend(ws, { type: "slide", page: pageNum, numPages: total });
+  };
+
+  useEffect(() => {
+    if (!joinCode || !pdfDoc) return;
+    broadcastSlide(joinCode, page, numPages);
+  }, [joinCode, pdfDoc, page, numPages]);
 
   const openPicker = () => fileInputRef.current?.click();
 
@@ -87,11 +212,13 @@ export default function Teacher() {
     if (!file) return;
     const ok = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
     if (!ok) {
-      setErr("Please upload a PDF file.");
+      setPdfErr("Please upload a PDF file.");
       return;
     }
 
-    setErr("");
+    const code = joinCode;
+
+    setPdfErr("");
     setLoadingPdf(true);
     setPdfName(file.name);
     setPdfDoc(null);
@@ -102,11 +229,27 @@ export default function Teacher() {
       const ab = await file.arrayBuffer();
       const task = pdfjsLib.getDocument({ data: ab });
       const doc = await task.promise;
+
       setPdfDoc(doc);
       setNumPages(doc.numPages);
       setPage(1);
+
+      try {
+        const data = await uploadPdfToRoom(file, code, doc.numPages);
+        const url = data?.url || "";
+        const name = data?.name || file.name;
+
+        if (url) {
+          wsSend(wsRef.current, { type: "pdf", url, name, numPages: doc.numPages });
+          wsSend(wsRef.current, { type: "slide", page: 1, numPages: doc.numPages });
+        } else {
+          setPdfErr("PDF uploaded, but the server didn't return a URL. Check /upload response.");
+        }
+      } catch {
+        setPdfErr("PDF opened, but couldn't upload for viewers. Is the backend running?");
+      }
     } catch {
-      setErr("That PDF couldn't be opened. Try a different file.");
+      setPdfErr("That PDF couldn't be opened. Try a different file.");
     } finally {
       setLoadingPdf(false);
     }
@@ -137,43 +280,48 @@ export default function Teacher() {
     setDragOver(false);
   };
 
-  const renderPageToCanvas = async (doc, pageNum, fullscreen, triesLeft = 6) => {
+  const renderPageToCanvas = async (doc, pageNum, fullscreen, triesLeft = 10) => {
     const viewportEl = fullscreen ? fsViewportRef.current : viewportRef.current;
     const canvas = fullscreen ? fsCanvasRef.current : canvasRef.current;
     if (!doc || !canvas || !viewportEl) return;
 
     const w = viewportEl.clientWidth;
     const h = viewportEl.clientHeight;
-    if ((w < 60 || h < 60) && triesLeft > 0) {
+    if ((w < 120 || h < 120) && triesLeft > 0) {
       requestAnimationFrame(() => renderPageToCanvas(doc, pageNum, fullscreen, triesLeft - 1));
       return;
     }
 
     const myRenderId = ++renderIdRef.current;
     setRendering(true);
-    setErr("");
+    setPdfErr("");
 
     try {
       const pdfPage = await doc.getPage(pageNum);
-      const padding = fullscreen ? 24 : 26;
+      const padding = fullscreen ? 0 : 22;
       const maxW = Math.max(240, viewportEl.clientWidth - padding);
       const maxH = Math.max(240, viewportEl.clientHeight - padding);
       const v1 = pdfPage.getViewport({ scale: 1 });
       const scale = Math.min(maxW / v1.width, maxH / v1.height);
       const viewport = pdfPage.getViewport({ scale });
       const dpr = window.devicePixelRatio || 1;
+
       canvas.width = Math.max(1, Math.floor(viewport.width * dpr));
       canvas.height = Math.max(1, Math.floor(viewport.height * dpr));
       canvas.style.width = `${Math.floor(viewport.width)}px`;
       canvas.style.height = `${Math.floor(viewport.height)}px`;
-      const ctx = canvas.getContext("2d");
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+      const ctx = canvas.getContext("2d", { alpha: false });
+      ctx.save();
+      ctx.scale(dpr, dpr);
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
       await pdfPage.render({ canvasContext: ctx, viewport }).promise;
+      ctx.restore();
+      
       if (myRenderId !== renderIdRef.current) return;
     } catch {
-      setErr("Couldn't render this slide.");
+      setPdfErr("Couldn't render this slide.");
     } finally {
       if (myRenderId === renderIdRef.current) setRendering(false);
     }
@@ -182,8 +330,22 @@ export default function Teacher() {
   useEffect(() => {
     if (!pdfDoc) return;
     renderPageToCanvas(pdfDoc, page, false);
-    if (isFullscreen) renderPageToCanvas(pdfDoc, page, true);
-  }, [pdfDoc, page, isFullscreen]);
+  }, [pdfDoc, page]);
+
+  useEffect(() => {
+    if (!isFullscreen || !pdfDoc) return;
+    let cancelled = false;
+
+    const run = async () => {
+      await waitForStableBox(fsViewportRef.current);
+      if (!cancelled) renderPageToCanvas(pdfDoc, page, true);
+    };
+
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [isFullscreen, pdfDoc, page]);
 
   useEffect(() => {
     if (!pdfDoc) return;
@@ -192,7 +354,9 @@ export default function Teacher() {
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => {
         renderPageToCanvas(pdfDoc, page, false);
-        if (isFullscreen) renderPageToCanvas(pdfDoc, page, true);
+        if (isFullscreen) {
+          waitForStableBox(fsViewportRef.current, 10).then(() => renderPageToCanvas(pdfDoc, page, true));
+        }
       });
     };
     window.addEventListener("resize", onResize, { passive: true });
@@ -208,31 +372,40 @@ export default function Teacher() {
   const next = () => setPage((p) => Math.min(numPages, p + 1));
 
   const stopCaptions = () => {
+    isStoppingRef.current = true;
     setCaptionStatus("");
+
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
       } catch {}
       recognitionRef.current = null;
     }
+
     if (chunkTimerRef.current) {
       try {
         window.clearInterval(chunkTimerRef.current);
       } catch {}
       chunkTimerRef.current = null;
     }
+
     if (mediaRecorderRef.current) {
       try {
         mediaRecorderRef.current.stop();
       } catch {}
       mediaRecorderRef.current = null;
     }
+
     if (mediaStreamRef.current) {
       try {
         mediaStreamRef.current.getTracks()?.forEach((t) => t.stop());
       } catch {}
       mediaStreamRef.current = null;
     }
+
+    setTimeout(() => {
+      isStoppingRef.current = false;
+    }, 100);
   };
 
   useEffect(() => {
@@ -242,11 +415,12 @@ export default function Teacher() {
   const startLocalCaptions = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      setCaptionStatus("Local captions aren't supported in this browser. Try Chrome/Edge or switch to Hosted.");
+      setCaptionStatus("Local captions aren't supported in this browser. Try Chrome/Edge.");
       setMicOn(false);
       return;
     }
 
+    isStoppingRef.current = false;
     setCaptionStatus("Listening (Local)…");
     const rec = new SpeechRecognition();
     recognitionRef.current = rec;
@@ -256,40 +430,50 @@ export default function Teacher() {
 
     let finalText = "";
 
+    rec.onstart = () => {
+      if (!isStoppingRef.current) setCaptionStatus("");
+    };
+
     rec.onresult = (event) => {
+      if (isStoppingRef.current) return;
       setCaptionStatus("");
       let interim = "";
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const chunk = event.results[i][0].transcript;
-        if (event.results[i].isFinal) {
-          finalText += chunk + " ";
-        } else {
-          interim += chunk;
-        }
+        if (event.results[i].isFinal) finalText += chunk + " ";
+        else interim += chunk;
       }
-      setTranscriptText((finalText + interim).trim());
+      const combined = (finalText + interim).trim();
+      setTranscriptText(combined);
+      maybeBroadcastTranscript(combined);
     };
 
     rec.onerror = (e) => {
-      console.error("Speech recognition error:", e);
-      const msg = e?.error ? `Local captions error: ${e.error}` : "Local captions error. Check permissions or switch to Hosted.";
+      if (isStoppingRef.current) return;
+      if (e.error === "no-speech") return;
+      if (e.error === "aborted") return;
+      const msg = e?.error ? `Local captions error: ${e.error}` : "Local captions error. Check microphone permissions.";
       setCaptionStatus(msg);
     };
 
     rec.onend = () => {
+      if (isStoppingRef.current) return;
       if (micOn && captionMode === "local" && recognitionRef.current === rec) {
-        try {
-          rec.start();
-        } catch (err) {
-          console.error("Failed to restart recognition:", err);
-        }
+        setTimeout(() => {
+          if (!isStoppingRef.current && micOn && captionMode === "local") {
+            try {
+              rec.start();
+            } catch {
+              if (!isStoppingRef.current) setCaptionStatus("Captions paused. Click mic to restart.");
+            }
+          }
+        }, 100);
       }
     };
 
     try {
       rec.start();
-    } catch (err) {
-      console.error("Failed to start recognition:", err);
+    } catch {
       setCaptionStatus("Couldn't start local captions. Refresh and allow microphone access.");
       setMicOn(false);
     }
@@ -342,7 +526,14 @@ export default function Teacher() {
         if (!res.ok) throw new Error("bad response");
         const data = await res.json();
         const text = (data?.text || "").trim();
-        if (text) setTranscriptText((prevText) => (prevText ? prevText + " " + text : text));
+        if (!text) return;
+
+        let nextText = "";
+        setTranscriptText((prevText) => {
+          nextText = prevText ? prevText + " " + text : text;
+          return nextText;
+        });
+        if (nextText) maybeBroadcastTranscript(nextText);
       } catch {
         setCaptionStatus("Hosted captions error (backend). Check your transcribe server URL.");
       }
@@ -368,17 +559,18 @@ export default function Teacher() {
     setCaptionStatus("");
     setMicOn(true);
 
-    if (captionMode === "local") {
-      startLocalCaptions();
-    } else {
-      await startHostedCaptions();
-    }
+    if (captionMode === "local") startLocalCaptions();
+    else await startHostedCaptions();
   };
 
   const switchMode = async (mode) => {
+    if (mode === "hosted") {
+      setCaptionStatus("Hosted captions are coming soon (in testing).");
+      return;
+    }
     if (mode === captionMode) return;
-    const wasOn = micOn;
 
+    const wasOn = micOn;
     if (wasOn) {
       setMicOn(false);
       stopCaptions();
@@ -390,59 +582,9 @@ export default function Teacher() {
 
     if (wasOn) {
       setMicOn(true);
-      if (mode === "local") {
-        startLocalCaptions();
-      } else {
-        await startHostedCaptions();
-      }
+      startLocalCaptions();
     }
   };
-
-  const connectRoom = (code) => {
-    try {
-      wsRef.current?.close();
-    } catch {}
-    wsRef.current = null;
-    if (!code) return;
-
-    try {
-      const ws = new WebSocket(`ws://localhost:5174/ws?code=${encodeURIComponent(code)}&role=teacher`);
-      wsRef.current = ws;
-      ws.onmessage = (ev) => {
-        try {
-          const msg = JSON.parse(ev.data || "{}");
-          if (msg?.type === "presence" && typeof msg?.count === "number") setStudentCount(msg.count);
-        } catch {}
-      };
-      ws.onclose = () => {
-        if (wsRef.current === ws) wsRef.current = null;
-      };
-    } catch {}
-  };
-
-  const broadcastSlide = (code, pageNum, total) => {
-    const ws = wsRef.current;
-    if (!code || !ws || ws.readyState !== 1) return;
-    try {
-      ws.send(JSON.stringify({ type: "slide", page: pageNum, numPages: total }));
-    } catch {}
-  };
-
-  useEffect(() => {
-    if (!joinCode) return;
-    connectRoom(joinCode);
-    return () => {
-      try {
-        wsRef.current?.close();
-      } catch {}
-      wsRef.current = null;
-    };
-  }, [joinCode]);
-
-  useEffect(() => {
-    if (!joinCode || !pdfDoc) return;
-    broadcastSlide(joinCode, page, numPages);
-  }, [joinCode, pdfDoc, page, numPages]);
 
   const ensureJoinCode = async (openModal) => {
     const nextCode = joinCode || makeCode();
@@ -459,9 +601,10 @@ export default function Teacher() {
 
   const closeJoinModal = () => setJoinModalOpen(false);
 
-  const openFullscreen = () => {
+  const openFullscreen = async () => {
     setIsFullscreen(true);
-    requestAnimationFrame(() => {
+    requestAnimationFrame(async () => {
+      await waitForStableBox(fsViewportRef.current);
       if (pdfDoc) renderPageToCanvas(pdfDoc, page, true);
     });
   };
@@ -469,6 +612,9 @@ export default function Teacher() {
   const closeFullscreen = () => setIsFullscreen(false);
 
   const layoutStyle = isNarrow ? styles.layoutNarrow : styles.layoutWide;
+
+  const shellPad = isShort ? "10px 12px" : "clamp(12px, 2.2vw, 20px) 16px";
+  const gap = isShort ? "12px" : "14px";
 
   return (
     <main
@@ -478,8 +624,8 @@ export default function Teacher() {
         transform: mounted ? "translateY(0px)" : "translateY(10px)",
       }}
     >
-      <div style={styles.shell}>
-        <div style={{ ...styles.layoutBase, ...layoutStyle }}>
+      <div style={{ ...styles.shell, padding: shellPad }}>
+        <div style={{ ...styles.layoutBase, ...layoutStyle, gap }}>
           <section style={styles.slidesArea} aria-label="Slides">
             <div
               ref={viewportRef}
@@ -501,17 +647,12 @@ export default function Teacher() {
               />
 
               {!pdfDoc ? (
-                <button
-                  type="button"
-                  onClick={openPicker}
-                  style={styles.uploadOverlayBtn}
-                  aria-label="Upload PDF"
-                >
+                <button type="button" onClick={openPicker} style={styles.uploadOverlayBtn} aria-label="Upload PDF">
                   <div style={styles.uploadInner}>
                     <div style={styles.uploadTitle}>Upload PDF</div>
                     <div style={styles.uploadSub}>Click to choose a file or drag & drop a PDF here.</div>
                     {loadingPdf && <div style={styles.statusPill}>Opening…</div>}
-                    {err && <div style={styles.errorPill}>{err}</div>}
+                    {!!pdfErr && <div style={styles.errorPill}>{pdfErr}</div>}
                   </div>
                 </button>
               ) : (
@@ -528,24 +669,27 @@ export default function Teacher() {
                       <button type="button" onClick={openPicker} style={styles.topActionBtn}>
                         Change PDF
                       </button>
+                      <button type="button" onClick={openFullscreen} style={styles.topActionBtn}>
+                        Fullscreen
+                      </button>
                     </div>
                   </div>
 
                   <div style={styles.slideControls}>
-                    <button
-                      type="button"
-                      onClick={prev}
-                      disabled={!canPrev}
-                      style={{ ...styles.navBtn, opacity: canPrev ? 1 : 0.45 }}
-                    >
-                      Prev
-                    </button>
-
-                    <div style={styles.counterPill}>
-                      Slide {page} / {numPages}
-                    </div>
-
                     <div style={{ display: "flex", gap: "10px", alignItems: "center", pointerEvents: "auto" }}>
+                      <button
+                        type="button"
+                        onClick={prev}
+                        disabled={!canPrev}
+                        style={{ ...styles.navBtn, opacity: canPrev ? 1 : 0.45 }}
+                      >
+                        Prev
+                      </button>
+
+                      <div style={styles.counterPill}>
+                        Slide {page} / {numPages}
+                      </div>
+
                       <button
                         type="button"
                         onClick={next}
@@ -554,29 +698,21 @@ export default function Teacher() {
                       >
                         Next
                       </button>
-                      <button type="button" onClick={openFullscreen} style={styles.fsMiniBtn} aria-label="Full screen">
-                        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
-                          <path d="M6 2H2v4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                          <path d="M12 2h4v4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                          <path d="M6 16H2v-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                          <path d="M12 16h4v-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                      </button>
                     </div>
                   </div>
 
                   {(rendering || loadingPdf) && <div style={styles.statusPillFloat}>Rendering…</div>}
-                  {err && <div style={styles.errorPillFloat}>{err}</div>}
+                  {!!pdfErr && <div style={styles.errorPillFloat}>{pdfErr}</div>}
                 </>
               )}
             </div>
           </section>
 
-          <div style={styles.rightCol}>
+          <aside style={{ ...styles.rightRail, gap }} aria-label="Live transcript and session controls">
             <section style={styles.transcriptArea} aria-label="Transcript">
               <div style={styles.transcriptHeader}>
                 <div style={styles.transcriptTitle}>Live Transcript</div>
-                <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", justifyContent: "flex-end" }}>
                   <div style={styles.modePills} role="group" aria-label="Captions mode">
                     <button
                       type="button"
@@ -595,10 +731,12 @@ export default function Teacher() {
                       onClick={() => switchMode("hosted")}
                       style={{
                         ...styles.modePill,
-                        backgroundColor: captionMode === "hosted" ? "rgba(44,177,166,0.16)" : "rgba(0,0,0,0.06)",
-                        borderColor: captionMode === "hosted" ? "rgba(44,177,166,0.34)" : "rgba(0,0,0,0.10)",
+                        opacity: 0.6,
+                        cursor: "not-allowed",
+                        backgroundColor: "rgba(0,0,0,0.06)",
+                        borderColor: "rgba(0,0,0,0.10)",
                       }}
-                      aria-pressed={captionMode === "hosted"}
+                      aria-pressed={false}
                     >
                       Hosted
                     </button>
@@ -612,9 +750,10 @@ export default function Teacher() {
               </div>
             </section>
 
-            <aside style={styles.controlDock} aria-label="Class controls">
+            <section style={styles.controlDock} aria-label="Session controls">
               <div style={styles.dockHeader}>
                 <div style={styles.dockTitle}>Session Controls</div>
+                <div style={styles.dockSub}>{wsErr ? "Backend connection hiccup" : "Live session ready"}</div>
               </div>
 
               <div style={styles.dockGrid}>
@@ -632,22 +771,18 @@ export default function Teacher() {
                   <div style={styles.compactLabel}>Mic</div>
                 </button>
 
-                <div style={styles.compactTile}>
+                <div style={styles.compactTile} aria-label="Viewers connected">
                   <div style={styles.compactIcon}>{studentCount}</div>
-                  <div style={styles.compactLabel}>Students</div>
+                  <div style={styles.compactLabel}>Viewers</div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => ensureJoinCode(true)}
-                  style={styles.joinCompactBtn}
-                >
+                <button type="button" onClick={() => ensureJoinCode(true)} style={styles.joinCompactBtn}>
                   <div style={styles.joinCompactCode}>{joinCode || "CODE"}</div>
                   <div style={styles.joinCompactLabel}>Join Code</div>
                 </button>
               </div>
-            </aside>
-          </div>
+            </section>
+          </aside>
         </div>
       </div>
 
@@ -662,16 +797,10 @@ export default function Teacher() {
         >
           <div style={styles.modalCard}>
             <div style={styles.modalTitle}>Join Code</div>
-            <button
-              type="button"
-              onClick={() => ensureJoinCode(false)}
-              style={styles.modalCodeBtn}
-            >
+            <button type="button" onClick={() => ensureJoinCode(false)} style={styles.modalCodeBtn}>
               {joinCode || "Generate"}
             </button>
-            <div style={styles.modalSub}>
-              {copied ? "Copied to clipboard." : "Click the code to copy."}
-            </div>
+            <div style={styles.modalSub}>{copied ? "Copied to clipboard." : "Click the code to copy."}</div>
             <button type="button" onClick={closeJoinModal} style={styles.modalCloseBtn}>
               Close
             </button>
@@ -680,24 +809,12 @@ export default function Teacher() {
       )}
 
       {isFullscreen && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          style={styles.fsOverlay}
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget) closeFullscreen();
-          }}
-        >
+        <div role="dialog" aria-modal="true" style={styles.fsOverlay}>
           <div style={styles.fsCard}>
-            <div style={styles.fsTop}>
-              <button type="button" onClick={closeFullscreen} style={styles.fsXBtn} aria-label="Close fullscreen">
-                ×
-              </button>
-              <div style={styles.fsTitle}>{pdfName ? `${pdfName} • Slide ${page}/${numPages}` : "Slides"}</div>
-              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                <div style={styles.fsMicPill}>{micOn ? "🎙️ Mic on" : "🔇 Mic off"}</div>
-              </div>
-            </div>
+            <button type="button" onClick={closeFullscreen} style={styles.fsCloseBtn} aria-label="Exit fullscreen">
+              <span style={styles.fsCloseX}>×</span>
+              <span style={styles.fsCloseText}>Close</span>
+            </button>
 
             <div ref={fsViewportRef} style={styles.fsViewport}>
               <div style={styles.fsCanvasWrap}>
@@ -727,7 +844,7 @@ export default function Teacher() {
               </div>
 
               {(rendering || loadingPdf) && <div style={styles.fsStatus}>Rendering…</div>}
-              {err && <div style={styles.fsError}>{err}</div>}
+              {!!pdfErr && <div style={styles.fsError}>{pdfErr}</div>}
             </div>
           </div>
         </div>
@@ -738,51 +855,53 @@ export default function Teacher() {
 
 const styles = {
   page: {
-    height: "100vh",
+    minHeight: "calc(100vh - var(--header-h))",
+    height: "calc(100vh - var(--header-h))",
     paddingTop: "var(--header-h)",
     boxSizing: "border-box",
-    overflow: "hidden",
     backgroundColor: COLORS.pageBg,
-    overflowX: "clip",
+    overflow: "hidden",
     transition: "opacity 320ms ease, transform 420ms ease",
   },
   shell: {
     height: "100%",
-    minHeight: 0,
-    maxWidth: "1320px",
+    maxWidth: "1440px",
     margin: "0 auto",
-    padding: "clamp(14px, 2.6vw, 26px) 18px",
+    padding: "clamp(12px, 2.2vw, 20px) 16px",
     boxSizing: "border-box",
+    overflow: "hidden",
   },
   layoutBase: {
     height: "100%",
-    minHeight: 0,
     display: "grid",
     gap: "14px",
     alignItems: "stretch",
+    minHeight: 0,
   },
   layoutWide: {
-    gridTemplateColumns: "minmax(0, 1.65fr) minmax(0, 1fr)",
-    minHeight: 0,
+    gridTemplateColumns: "minmax(0, 1fr) clamp(340px, 32vw, 450px)",
+    gridTemplateRows: "1fr",
   },
   layoutNarrow: {
     gridTemplateColumns: "1fr",
+    gridTemplateRows: "minmax(0, 1.2fr) minmax(0, 1fr)",
   },
+
   slidesArea: {
     width: "100%",
     borderRadius: "22px",
     overflow: "hidden",
     minHeight: 0,
+    height: "100%",
   },
   slideViewport: {
     position: "relative",
     width: "100%",
     height: "100%",
-    minHeight: 0,
     backgroundColor: COLORS.beige,
     borderRadius: "22px",
     border: "2px dashed rgba(0,0,0,0.14)",
-    boxShadow: "0 16px 38px rgba(0,0,0,0.10)",
+    boxShadow: "0 6px 12px rgba(0,0,0,0.08)",
     overflow: "hidden",
     display: "grid",
     placeItems: "center",
@@ -799,7 +918,7 @@ const styles = {
     padding: "18px",
   },
   uploadInner: {
-    width: "min(640px, 100%)",
+    width: "min(720px, 100%)",
     textAlign: "center",
     display: "grid",
     gap: "10px",
@@ -807,7 +926,7 @@ const styles = {
   },
   uploadTitle: {
     fontFamily: "Merriweather, serif",
-    fontSize: "clamp(30px, 3.3vw, 48px)",
+    fontSize: "clamp(30px, 3.6vw, 52px)",
     fontWeight: 900,
     letterSpacing: "-0.03em",
     color: COLORS.black,
@@ -815,7 +934,7 @@ const styles = {
   },
   uploadSub: {
     fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "clamp(14px, 1.25vw, 16px)",
+    fontSize: "clamp(13px, 1.2vw, 16px)",
     fontWeight: 650,
     lineHeight: 1.65,
     color: "rgba(0,0,0,0.68)",
@@ -850,20 +969,21 @@ const styles = {
     borderRadius: "999px",
     padding: "8px 10px",
     fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "12.5px",
+    fontSize: "clamp(11px, 1.15vw, 12.5px)",
     fontWeight: 850,
     color: "rgba(0,0,0,0.74)",
     backdropFilter: "blur(6px)",
     WebkitBackdropFilter: "blur(6px)",
   },
   topActionBtn: {
+    pointerEvents: "auto",
     border: "1px solid rgba(0,0,0,0.12)",
     backgroundColor: "rgba(255,255,255,0.78)",
     borderRadius: "14px",
     padding: "8px 10px",
     cursor: "pointer",
     fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "12.5px",
+    fontSize: "clamp(11px, 1.15vw, 12.5px)",
     fontWeight: 900,
     color: "rgba(0,0,0,0.74)",
     backdropFilter: "blur(6px)",
@@ -876,7 +996,7 @@ const styles = {
     bottom: "12px",
     display: "flex",
     alignItems: "center",
-    justifyContent: "space-between",
+    justifyContent: "center",
     gap: "10px",
     pointerEvents: "none",
   },
@@ -888,7 +1008,7 @@ const styles = {
     padding: "10px 12px",
     cursor: "pointer",
     fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "13px",
+    fontSize: "clamp(12px, 1.2vw, 13px)",
     fontWeight: 900,
     color: "rgba(0,0,0,0.78)",
     backdropFilter: "blur(6px)",
@@ -901,23 +1021,9 @@ const styles = {
     borderRadius: "999px",
     padding: "10px 12px",
     fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "13px",
+    fontSize: "clamp(12px, 1.2vw, 13px)",
     fontWeight: 950,
     color: "rgba(0,0,0,0.72)",
-    backdropFilter: "blur(6px)",
-    WebkitBackdropFilter: "blur(6px)",
-  },
-  fsMiniBtn: {
-    pointerEvents: "auto",
-    border: "1px solid rgba(0,0,0,0.12)",
-    backgroundColor: "rgba(255,255,255,0.82)",
-    borderRadius: "14px",
-    padding: "8px",
-    cursor: "pointer",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    color: "rgba(0,0,0,0.78)",
     backdropFilter: "blur(6px)",
     WebkitBackdropFilter: "blur(6px)",
   },
@@ -928,7 +1034,7 @@ const styles = {
     padding: "7px 10px",
     borderRadius: "999px",
     fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "12px",
+    fontSize: "clamp(11px, 1.1vw, 12px)",
     fontWeight: 900,
     width: "fit-content",
   },
@@ -941,7 +1047,7 @@ const styles = {
     padding: "7px 10px",
     borderRadius: "999px",
     fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "12px",
+    fontSize: "clamp(11px, 1.1vw, 12px)",
     fontWeight: 900,
   },
   errorPill: {
@@ -951,10 +1057,10 @@ const styles = {
     padding: "10px 12px",
     borderRadius: "14px",
     fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "13px",
+    fontSize: "clamp(12px, 1.2vw, 13px)",
     fontWeight: 850,
     width: "fit-content",
-    maxWidth: "min(720px, 92vw)",
+    maxWidth: "min(900px, 92vw)",
   },
   errorPillFloat: {
     position: "absolute",
@@ -966,27 +1072,32 @@ const styles = {
     padding: "10px 12px",
     borderRadius: "14px",
     fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "13px",
+    fontSize: "clamp(12px, 1.2vw, 13px)",
     fontWeight: 850,
     textAlign: "center",
   },
-  rightCol: {
-    position: "relative",
-    minHeight: 0,
-    display: "grid",
-    gridTemplateRows: "minmax(0, 1fr)",
+
+  rightRail: {
+    width: "100%",
+    height: "100%",
+    display: "flex",
+    flexDirection: "column",
     gap: "14px",
+    minHeight: 0,
+    overflow: "hidden",
   },
+
   transcriptArea: {
     width: "100%",
+    flex: "1 1 0",
+    minHeight: 0,
     borderRadius: "22px",
     backgroundColor: COLORS.beigeDark,
     border: "1px solid rgba(0,0,0,0.08)",
-    boxShadow: "0 14px 30px rgba(0,0,0,0.10)",
+    boxShadow: "0 4px 8px rgba(0,0,0,0.06)",
     overflow: "hidden",
-    display: "grid",
-    gridTemplateRows: "auto minmax(0, 1fr)",
-    minHeight: 0,
+    display: "flex",
+    flexDirection: "column",
   },
   transcriptHeader: {
     display: "flex",
@@ -997,10 +1108,11 @@ const styles = {
     borderBottom: "1px solid rgba(0,0,0,0.08)",
     backgroundColor: "rgba(255,255,255,0.55)",
     flexWrap: "wrap",
+    flexShrink: 0,
   },
   transcriptTitle: {
     fontFamily: "Merriweather, serif",
-    fontSize: "clamp(16px, 1.8vw, 18px)",
+    fontSize: "clamp(16px, 1.7vw, 18px)",
     fontWeight: 900,
     letterSpacing: "-0.02em",
     color: COLORS.black,
@@ -1037,36 +1149,39 @@ const styles = {
     background: "rgba(0,0,0,0.06)",
   },
   transcriptBody: {
+    flex: "1 1 0",
+    minHeight: 0,
     padding: "14px",
-    paddingRight: "clamp(14px, 30vw, 380px)",
     overflow: "auto",
   },
   transcriptText: {
     fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "clamp(14px, 1.4vw, 15px)",
+    fontSize: "clamp(14px, 1.25vw, 15px)",
     lineHeight: 1.7,
     fontWeight: 600,
     color: "rgba(0,0,0,0.76)",
     whiteSpace: "pre-wrap",
   },
+
   controlDock: {
-    position: "absolute",
-    bottom: "14px",
-    right: "14px",
-    width: "clamp(180px, 28vw, 240px)",
-    zIndex: 5,
-    borderRadius: "16px",
+    width: "100%",
+    flexShrink: 0,
+    borderRadius: "18px",
     backgroundColor: "rgba(255,255,255,0.92)",
     border: "1px solid rgba(0,0,0,0.08)",
-    boxShadow: "0 18px 46px rgba(0,0,0,0.12)",
+    boxShadow: "0 4px 8px rgba(0,0,0,0.06)",
     padding: "10px",
     boxSizing: "border-box",
     overflow: "hidden",
+    display: "flex",
+    flexDirection: "column",
+    gap: "8px",
   },
   dockHeader: {
     display: "grid",
     gap: "4px",
-    padding: "4px 4px 8px",
+    padding: "4px 4px 4px",
+    flexShrink: 0,
   },
   dockTitle: {
     fontFamily: "Merriweather, serif",
@@ -1076,14 +1191,21 @@ const styles = {
     color: COLORS.black,
     lineHeight: 1.1,
   },
+  dockSub: {
+    fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
+    fontSize: "clamp(11px, 1.1vw, 12px)",
+    fontWeight: 650,
+    color: "rgba(0,0,0,0.58)",
+  },
   dockGrid: {
     display: "grid",
-    gridTemplateColumns: "1fr 1fr 1fr",
+    gridTemplateColumns: "1fr 1fr",
     gap: "8px",
+    flexShrink: 0,
   },
   compactTile: {
     borderRadius: "14px",
-    padding: "8px 6px",
+    padding: "clamp(8px, 1.2vw, 10px)",
     cursor: "pointer",
     display: "flex",
     flexDirection: "column",
@@ -1091,22 +1213,22 @@ const styles = {
     justifyContent: "center",
     gap: "4px",
     textAlign: "center",
-    boxShadow: "0 8px 20px rgba(0,0,0,0.08)",
-    transition: "transform 160ms ease, box-shadow 220ms ease",
+    boxShadow: "none",
     outline: "none",
     border: "1px solid rgba(0,0,0,0.10)",
     backgroundColor: "rgba(0,0,0,0.04)",
+    minHeight: "66px",
   },
   compactIcon: {
     fontFamily: "Merriweather, serif",
-    fontSize: "clamp(18px, 2vw, 22px)",
+    fontSize: "clamp(18px, 2.2vw, 24px)",
     fontWeight: 900,
     color: "rgba(0,0,0,0.84)",
     lineHeight: 1,
   },
   compactLabel: {
     fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "clamp(9px, 1vw, 10px)",
+    fontSize: "clamp(9px, 1vw, 11px)",
     fontWeight: 900,
     color: "rgba(0,0,0,0.62)",
     letterSpacing: "0.02em",
@@ -1114,37 +1236,39 @@ const styles = {
     lineHeight: 1.2,
   },
   joinCompactBtn: {
-    gridColumn: "1 / span 3",
+    gridColumn: "1 / span 2",
     border: "none",
     borderRadius: "16px",
-    padding: "10px 8px",
+    padding: "clamp(10px, 1.4vw, 12px)",
     cursor: "pointer",
     background: `linear-gradient(135deg, ${COLORS.teal}, rgba(44,177,166,0.82))`,
     color: COLORS.white,
-    boxShadow: "0 16px 38px rgba(0,0,0,0.16)",
+    boxShadow: "none",
     display: "flex",
     flexDirection: "column",
     alignItems: "center",
     justifyContent: "center",
     gap: "4px",
     textAlign: "center",
+    minHeight: "72px",
   },
   joinCompactCode: {
     fontFamily: "Merriweather, serif",
-    fontSize: "clamp(16px, 2vw, 20px)",
+    fontSize: "clamp(18px, 2.4vw, 24px)",
     fontWeight: 900,
     letterSpacing: "0.08em",
     lineHeight: 1,
   },
   joinCompactLabel: {
     fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "clamp(9px, 1vw, 10px)",
+    fontSize: "clamp(9px, 1vw, 11px)",
     fontWeight: 900,
     color: "rgba(255,255,255,0.86)",
     letterSpacing: "0.02em",
     textTransform: "uppercase",
     lineHeight: 1.2,
   },
+
   modalOverlay: {
     position: "fixed",
     inset: 0,
@@ -1208,149 +1332,138 @@ const styles = {
     color: "rgba(0,0,0,0.72)",
     width: "fit-content",
   },
+
   fsOverlay: {
     position: "fixed",
     inset: 0,
-    backgroundColor: "rgba(10,12,12,0.72)",
-    zIndex: 60,
-    display: "grid",
-    placeItems: "center",
-    padding: "14px",
-  },
-  fsCard: {
-    width: "min(1400px, 99vw)",
-    height: "min(960px, 96vh)",
-    borderRadius: "26px",
-    backgroundColor: "rgba(255,255,255,0.92)",
-    border: "1px solid rgba(255,255,255,0.20)",
-    boxShadow: "0 34px 110px rgba(0,0,0,0.42)",
-    overflow: "hidden",
-    display: "grid",
-    gridTemplateRows: "auto 1fr",
-    backdropFilter: "blur(10px)",
-    WebkitBackdropFilter: "blur(10px)",
-  },
-  fsTop: {
-    padding: "12px 14px",
+    backgroundColor: "rgba(5, 6, 7, 0.96)",
+    zIndex: 80,
     display: "flex",
     alignItems: "center",
-    justifyContent: "space-between",
-    gap: "10px",
-    borderBottom: "1px solid rgba(0,0,0,0.08)",
-    backgroundColor: "rgba(255,255,255,0.72)",
+    justifyContent: "center",
+    padding: 0,
   },
-  fsTitle: {
-    fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "clamp(12px, 1.2vw, 13px)",
-    fontWeight: 900,
-    color: "rgba(0,0,0,0.74)",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-    maxWidth: "72%",
+  fsCard: {
+    width: "100vw",
+    height: "100vh",
+    position: "relative",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
   },
-  fsMicPill: {
-    backgroundColor: "rgba(44,177,166,0.14)",
-    border: "1px solid rgba(44,177,166,0.28)",
+  fsCloseBtn: {
+    position: "absolute",
+    top: "clamp(12px, 2vw, 18px)",
+    right: "clamp(12px, 2vw, 18px)",
+    zIndex: 90,
+    border: "1px solid rgba(255,255,255,0.18)",
+    backgroundColor: "rgba(210, 48, 48, 0.92)",
     borderRadius: "999px",
-    padding: "8px 10px",
-    fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "clamp(11px, 1.1vw, 12px)",
+    padding: "10px 14px",
+    cursor: "pointer",
+    color: "rgba(255,255,255,0.96)",
+    display: "flex",
+    alignItems: "center",
+    gap: "10px",
+    boxShadow: "0 18px 46px rgba(0,0,0,0.40)",
+    backdropFilter: "blur(8px)",
+    WebkitBackdropFilter: "blur(8px)",
+  },
+  fsCloseX: {
+    fontSize: "22px",
     fontWeight: 900,
-    color: "rgba(0,0,0,0.72)",
-    whiteSpace: "nowrap",
+    lineHeight: 1,
+    marginTop: "-1px",
+  },
+  fsCloseText: {
+    fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
+    fontSize: "13px",
+    fontWeight: 900,
+    letterSpacing: "0.02em",
+    textTransform: "uppercase",
+    lineHeight: 1,
   },
   fsViewport: {
     position: "relative",
     width: "100%",
     height: "100%",
-    backgroundColor: COLORS.beige,
-    display: "grid",
-    placeItems: "center",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
     overflow: "hidden",
   },
   fsCanvasWrap: {
     width: "100%",
     height: "100%",
-    display: "grid",
-    placeItems: "center",
-    padding: "10px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 0,
     boxSizing: "border-box",
   },
   fsControls: {
     position: "absolute",
-    left: "14px",
-    right: "14px",
-    bottom: "14px",
+    left: "clamp(14px, 2vw, 24px)",
+    right: "clamp(14px, 2vw, 24px)",
+    bottom: "clamp(14px, 2vw, 24px)",
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: "12px",
+    gap: "clamp(12px, 2vw, 20px)",
     pointerEvents: "none",
   },
   fsNavBtn: {
     pointerEvents: "auto",
-    border: "1px solid rgba(0,0,0,0.12)",
-    backgroundColor: "rgba(255,255,255,0.86)",
+    border: "1px solid rgba(255,255,255,0.18)",
+    backgroundColor: "rgba(0,0,0,0.62)",
     borderRadius: "16px",
-    padding: "12px 14px",
+    padding: "clamp(10px, 1.5vw, 14px) clamp(12px, 2vw, 18px)",
     cursor: "pointer",
     fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "clamp(12px, 1.2vw, 13px)",
+    fontSize: "clamp(13px, 1.4vw, 16px)",
     fontWeight: 900,
-    color: "rgba(0,0,0,0.78)",
+    color: "rgba(255,255,255,0.92)",
     backdropFilter: "blur(8px)",
     WebkitBackdropFilter: "blur(8px)",
   },
   fsCounter: {
     pointerEvents: "none",
-    backgroundColor: "rgba(44,177,166,0.16)",
-    border: "1px solid rgba(44,177,166,0.30)",
+    backgroundColor: "rgba(44,177,166,0.82)",
+    border: "1px solid rgba(44,177,166,0.40)",
     borderRadius: "999px",
-    padding: "12px 14px",
+    padding: "clamp(10px, 1.5vw, 14px) clamp(14px, 2vw, 18px)",
     fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "clamp(12px, 1.2vw, 13px)",
+    fontSize: "clamp(13px, 1.4vw, 16px)",
     fontWeight: 950,
-    color: "rgba(0,0,0,0.72)",
+    color: "rgba(255,255,255,0.96)",
     backdropFilter: "blur(8px)",
     WebkitBackdropFilter: "blur(8px)",
   },
   fsStatus: {
     position: "absolute",
-    top: "14px",
-    right: "14px",
+    top: "clamp(14px, 2vw, 20px)",
+    left: "50%",
+    transform: "translateX(-50%)",
     backgroundColor: "rgba(0,0,0,0.74)",
     color: COLORS.white,
-    padding: "8px 10px",
+    padding: "8px 12px",
     borderRadius: "999px",
     fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "clamp(11px, 1.1vw, 12px)",
+    fontSize: "clamp(11px, 1.2vw, 13px)",
     fontWeight: 900,
   },
   fsError: {
     position: "absolute",
-    left: "14px",
-    right: "14px",
-    top: "56px",
+    left: "clamp(14px, 2vw, 24px)",
+    right: "clamp(14px, 2vw, 24px)",
+    top: "clamp(14px, 2vw, 20px)",
     backgroundColor: "rgba(232,91,91,0.92)",
     color: COLORS.white,
-    padding: "10px 12px",
-    borderRadius: "14px",
+    padding: "12px 16px",
+    borderRadius: "16px",
     fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "clamp(12px, 1.2vw, 13px)",
+    fontSize: "clamp(12px, 1.3vw, 14px)",
     fontWeight: 850,
     textAlign: "center",
-  },
-  fsXBtn: {
-    border: "1px solid rgba(0,0,0,0.12)",
-    backgroundColor: "rgba(0,0,0,0.06)",
-    borderRadius: "14px",
-    width: "clamp(36px, 4vw, 40px)",
-    height: "clamp(36px, 4vw, 40px)",
-    cursor: "pointer",
-    fontSize: "clamp(20px, 2.2vw, 22px)",
-    fontWeight: 900,
-    lineHeight: 1,
-    color: "rgba(0,0,0,0.72)",
   },
 };

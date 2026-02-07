@@ -129,7 +129,7 @@ export default function Host() {
         <section style={cardStyle} aria-label="Choose your role">
           <h1 style={titleStyle}>Choose what fits you best.</h1>
           <p style={subStyle}>
-            Pick what describes you best. Everyone can host, we’ll just tailor the next page’s subheading.
+            Pick what describes you best.
           </p>
 
           <div style={gridStyle} role="list">
