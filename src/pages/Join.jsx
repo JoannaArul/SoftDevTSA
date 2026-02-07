@@ -1,7 +1,7 @@
-// Join.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as pdfjsLib from "pdfjs-dist";
 import pdfWorker from "pdfjs-dist/build/pdf.worker?url";
+import { BACKEND_HTTP, BACKEND_WS } from "../backend";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
@@ -22,8 +22,8 @@ function cleanCode(v) {
 function absolutizeUrl(url) {
   if (!url) return "";
   if (/^https?:\/\//i.test(url)) return url;
-  if (url.startsWith("/")) return `http://localhost:5174${url}`;
-  return `http://localhost:5174/${url}`;
+  if (url.startsWith("/")) return `${BACKEND_HTTP}${url}`;
+  return `${BACKEND_HTTP}/${url}`;
 }
 
 export default function Join() {
@@ -85,7 +85,9 @@ export default function Join() {
     setJoined(false);
 
     try {
-      const ws = new WebSocket(`ws://localhost:5174/ws?code=${encodeURIComponent(c)}&role=student`);
+      const ws = new WebSocket(
+        `${BACKEND_WS}/ws?code=${encodeURIComponent(c)}&role=student`
+      );
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -139,7 +141,7 @@ export default function Join() {
       };
 
       ws.onerror = () => {
-        setErr("WebSocket error. Is your backend running on :5174?");
+        setErr("WebSocket error. Check your backend URL and that /ws is reachable.");
       };
     } catch {
       setErr("Couldn't connect. Check backend and join code.");

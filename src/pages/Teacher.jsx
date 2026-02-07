@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as pdfjsLib from "pdfjs-dist";
 import pdfWorker from "pdfjs-dist/build/pdf.worker?url";
+import { BACKEND_HTTP, BACKEND_WS } from "../backend";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
@@ -25,7 +26,7 @@ async function uploadPdfToRoom(file, code, numPages) {
   const form = new FormData();
   form.append("pdf", file);
   const res = await fetch(
-    `http://localhost:5174/upload?code=${encodeURIComponent(code)}&numPages=${encodeURIComponent(
+    `${BACKEND_HTTP}/upload?code=${encodeURIComponent(code)}&numPages=${encodeURIComponent(
       String(numPages || 0)
     )}`,
     { method: "POST", body: form }
@@ -94,7 +95,7 @@ export default function Teacher() {
   const [studentCount, setStudentCount] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  const TRANSCRIBE_URL = "http://localhost:5174/transcribe";
+  const TRANSCRIBE_URL = `${BACKEND_HTTP}/transcribe`;
 
   useEffect(() => {
     const t = requestAnimationFrame(() => setMounted(true));
@@ -156,13 +157,17 @@ export default function Teacher() {
     setWsErr("");
 
     try {
-      const ws = new WebSocket(`ws://localhost:5174/ws?code=${encodeURIComponent(code)}&role=teacher`);
+      const ws = new WebSocket(`${BACKEND_WS}/ws?code=${encodeURIComponent(code)}&role=teacher`);
       wsRef.current = ws;
 
       ws.onopen = () => {
         setWsErr("");
-        wsSend(ws, { type: "presence", role: "teacher" });
-        if (pdfDoc) wsSend(ws, { type: "slide", page, numPages });
+        if (pdfDoc) {
+          wsSend(ws, { type: "pdf", url: "", name: pdfName || "", numPages: numPages || 0 });
+          wsSend(ws, { type: "slide", page, numPages });
+        } else {
+          wsSend(ws, { type: "slide", page: 1, numPages: 0 });
+        }
       };
 
       ws.onmessage = (ev) => {
@@ -246,7 +251,7 @@ export default function Teacher() {
           setPdfErr("PDF uploaded, but the server didn't return a URL. Check /upload response.");
         }
       } catch {
-        setPdfErr("PDF opened, but couldn't upload for viewers. Is the backend running?");
+        setPdfErr("PDF opened, but couldn't upload for viewers. Check your backend URL.");
       }
     } catch {
       setPdfErr("That PDF couldn't be opened. Try a different file.");
@@ -311,14 +316,12 @@ export default function Teacher() {
       canvas.style.width = `${Math.floor(viewport.width)}px`;
       canvas.style.height = `${Math.floor(viewport.height)}px`;
 
-      const ctx = canvas.getContext("2d", { alpha: false });
-      ctx.save();
-      ctx.scale(dpr, dpr);
+      const ctx = canvas.getContext("2d");
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
       await pdfPage.render({ canvasContext: ctx, viewport }).promise;
-      ctx.restore();
-      
       if (myRenderId !== renderIdRef.current) return;
     } catch {
       setPdfErr("Couldn't render this slide.");
@@ -488,63 +491,8 @@ export default function Teacher() {
   };
 
   const startHostedCaptions = async () => {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setCaptionStatus("Hosted captions require microphone access (getUserMedia not supported).");
-      setMicOn(false);
-      return;
-    }
-
-    setCaptionStatus("Listening (Hosted)…");
-    let stream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch {
-      setCaptionStatus("Microphone permission denied.");
-      setMicOn(false);
-      return;
-    }
-
-    mediaStreamRef.current = stream;
-    const mimeType = pickMimeType();
-    let recorder;
-    try {
-      recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-    } catch {
-      setCaptionStatus("Couldn't start audio recorder in this browser. Try Local captions.");
-      setMicOn(false);
-      return;
-    }
-
-    mediaRecorderRef.current = recorder;
-
-    recorder.ondataavailable = async (e) => {
-      if (!e.data || e.data.size === 0) return;
-      try {
-        const form = new FormData();
-        form.append("audio", e.data, "chunk.webm");
-        const res = await fetch(TRANSCRIBE_URL, { method: "POST", body: form });
-        if (!res.ok) throw new Error("bad response");
-        const data = await res.json();
-        const text = (data?.text || "").trim();
-        if (!text) return;
-
-        let nextText = "";
-        setTranscriptText((prevText) => {
-          nextText = prevText ? prevText + " " + text : text;
-          return nextText;
-        });
-        if (nextText) maybeBroadcastTranscript(nextText);
-      } catch {
-        setCaptionStatus("Hosted captions error (backend). Check your transcribe server URL.");
-      }
-    };
-
-    recorder.start();
-    chunkTimerRef.current = window.setInterval(() => {
-      try {
-        recorder.requestData();
-      } catch {}
-    }, 1500);
+    setCaptionStatus("Hosted captions are currently disabled.");
+    setMicOn(false);
   };
 
   const toggleMic = async () => {
@@ -565,7 +513,7 @@ export default function Teacher() {
 
   const switchMode = async (mode) => {
     if (mode === "hosted") {
-      setCaptionStatus("Hosted captions are coming soon (in testing).");
+      setCaptionStatus("Hosted captions are currently disabled.");
       return;
     }
     if (mode === captionMode) return;
@@ -886,7 +834,6 @@ const styles = {
     gridTemplateColumns: "1fr",
     gridTemplateRows: "minmax(0, 1.2fr) minmax(0, 1fr)",
   },
-
   slidesArea: {
     width: "100%",
     borderRadius: "22px",
@@ -1076,7 +1023,6 @@ const styles = {
     fontWeight: 850,
     textAlign: "center",
   },
-
   rightRail: {
     width: "100%",
     height: "100%",
@@ -1086,7 +1032,6 @@ const styles = {
     minHeight: 0,
     overflow: "hidden",
   },
-
   transcriptArea: {
     width: "100%",
     flex: "1 1 0",
@@ -1162,7 +1107,6 @@ const styles = {
     color: "rgba(0,0,0,0.76)",
     whiteSpace: "pre-wrap",
   },
-
   controlDock: {
     width: "100%",
     flexShrink: 0,
@@ -1268,7 +1212,6 @@ const styles = {
     textTransform: "uppercase",
     lineHeight: 1.2,
   },
-
   modalOverlay: {
     position: "fixed",
     inset: 0,
@@ -1332,7 +1275,6 @@ const styles = {
     color: "rgba(0,0,0,0.72)",
     width: "fit-content",
   },
-
   fsOverlay: {
     position: "fixed",
     inset: 0,
