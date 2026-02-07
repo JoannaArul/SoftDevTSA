@@ -182,7 +182,7 @@ export default function Home() {
                         : "0 10px 20px rgba(0,0,0,0.26)",
                   }}
                 >
-                  Start as Teacher
+                  Start Slideshow
                 </button>
 
                 <button
@@ -199,7 +199,7 @@ export default function Home() {
                         : "0 10px 20px rgba(0,0,0,0.26)",
                   }}
                 >
-                  Join as Student
+                  Join 
                 </button>
               </div>
             </div>
