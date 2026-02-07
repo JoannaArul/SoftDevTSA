@@ -8,7 +8,14 @@ import path from "path";
 import fs from "fs";
 
 const app = express();
-app.use(cors());
+app.set("trust proxy", 1);
+
+app.use(
+  cors({
+    origin: true,
+    credentials: true,
+  })
+);
 app.use(express.json());
 
 const server = http.createServer(app);
@@ -22,6 +29,13 @@ const storage = multer.diskStorage({
   filename: (_req, file, cb) => cb(null, `${randomUUID()}-${file.originalname}`),
 });
 const upload = multer({ storage });
+
+function getBaseUrl(req) {
+  if (process.env.PUBLIC_BASE_URL) return process.env.PUBLIC_BASE_URL.replace(/\/$/, "");
+  const proto = (req.headers["x-forwarded-proto"] || req.protocol || "http").toString().split(",")[0].trim();
+  const host = (req.headers["x-forwarded-host"] || req.headers.host || "").toString().split(",")[0].trim();
+  return host ? `${proto}://${host}` : "http://localhost:5174";
+}
 
 app.use("/files", express.static(uploadsDir));
 
@@ -69,7 +83,9 @@ app.post("/upload", upload.single("pdf"), (req, res) => {
 
     const room = getRoom(code);
 
-    const url = `http://localhost:5174/files/${encodeURIComponent(req.file.filename)}`;
+    const baseUrl = getBaseUrl(req);
+    const url = `${baseUrl}/files/${encodeURIComponent(req.file.filename)}`;
+
     room.pdfUrl = url;
     room.pdfName = req.file.originalname;
 
@@ -94,9 +110,9 @@ app.post("/upload", upload.single("pdf"), (req, res) => {
 });
 
 wss.on("connection", (ws, req) => {
-  const url = new URL(req.url, "http://localhost");
-  const code = (url.searchParams.get("code") || "").toUpperCase().trim();
-  const role = (url.searchParams.get("role") || "student").toLowerCase();
+  const u = new URL(req.url, "http://localhost");
+  const code = (u.searchParams.get("code") || "").toUpperCase().trim();
+  const role = (u.searchParams.get("role") || "student").toLowerCase();
 
   if (!code) {
     ws.close();
@@ -172,8 +188,8 @@ wss.on("connection", (ws, req) => {
   }
 });
 
-server.listen(5174, () => {
-  console.log("Server on http://localhost:5174");
-  console.log("Health: http://localhost:5174/health");
-  console.log("WS: ws://localhost:5174/ws");
+const PORT = process.env.PORT || 5174;
+
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
