@@ -128,9 +128,7 @@ export default function Host() {
 
         <section style={cardStyle} aria-label="Choose your role">
           <h1 style={titleStyle}>Choose what fits you best.</h1>
-          <p style={subStyle}>
-            Pick what describes you best.
-          </p>
+          <p style={subStyle}>Pick what describes you best.</p>
 
           <div style={gridStyle} role="list">
             {roles.map((r) => {
@@ -177,10 +175,20 @@ export default function Host() {
                   >
                     {r.icon}
                   </span>
-                  <span style={{ ...styles.roleText, fontSize: compact ? "15px" : styles.roleText.fontSize }}>
+                  <span
+                    style={{
+                      ...styles.roleText,
+                      fontSize: compact ? "15px" : styles.roleText.fontSize,
+                    }}
+                  >
                     {r.label}
                   </span>
-                  <span style={{ ...styles.roleHint, fontSize: compact ? "12.5px" : styles.roleHint.fontSize }}>
+                  <span
+                    style={{
+                      ...styles.roleHint,
+                      fontSize: compact ? "12.5px" : styles.roleHint.fontSize,
+                    }}
+                  >
                     Continue
                   </span>
                 </button>
@@ -310,7 +318,7 @@ const styles = {
     cursor: "pointer",
     transition: "transform 160ms ease, box-shadow 220ms ease",
     display: "grid",
-    gridTemplateColumns: "48px 1fr",
+    gridTemplateColumns: "48px minmax(0, 1fr)",
     gridTemplateRows: "auto auto",
     columnGap: "12px",
     rowGap: "4px",
@@ -340,6 +348,10 @@ const styles = {
     letterSpacing: "-0.01em",
     color: COLORS.black,
     lineHeight: 1.15,
+    minWidth: 0,
+    display: "block",
+    overflowWrap: "anywhere",
+    wordBreak: "break-word",
   },
 
   roleHint: {
@@ -347,6 +359,8 @@ const styles = {
     fontSize: "13px",
     fontWeight: 650,
     color: "rgba(0,0,0,0.62)",
+    minWidth: 0,
+    display: "block",
   },
 
   footerRow: {
