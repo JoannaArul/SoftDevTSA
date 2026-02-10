@@ -54,13 +54,15 @@ const waitForStableBox = (el, tries = 18) =>
     tick(tries);
   });
 
-export default function Teacher() {
+export default function Teacher({ onFullscreenChange }) {
   const fileInputRef = useRef(null);
   const viewportRef = useRef(null);
   const canvasRef = useRef(null);
   const fsViewportRef = useRef(null);
   const fsCanvasRef = useRef(null);
   const renderIdRef = useRef(0);
+  const renderTaskRef = useRef(null); // Track normal canvas render task
+  const fsRenderTaskRef = useRef(null); // Track fullscreen canvas render task
   const recognitionRef = useRef(null);
   const mediaStreamRef = useRef(null);
   const mediaRecorderRef = useRef(null);
@@ -117,18 +119,20 @@ export default function Teacher() {
   useEffect(() => {
     if (!isFullscreen) return;
     const onKey = (e) => {
-      if (e.key === "Escape") setIsFullscreen(false);
+      if (e.key === "Escape") {
+        closeFullscreen();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [isFullscreen]);
 
   useEffect(() => {
-    const prev = document.body.style.overflow;
-    if (isFullscreen) document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = prev || "";
-    };
+    if (isFullscreen) {
+      document.body.style.overflow = "hidden";
+    } else {
+      document.body.style.overflow = "";
+    }
   }, [isFullscreen]);
 
   const maybeBroadcastTranscript = (text) => {
@@ -288,6 +292,8 @@ export default function Teacher() {
   const renderPageToCanvas = async (doc, pageNum, fullscreen, triesLeft = 10) => {
     const viewportEl = fullscreen ? fsViewportRef.current : viewportRef.current;
     const canvas = fullscreen ? fsCanvasRef.current : canvasRef.current;
+    const taskRef = fullscreen ? fsRenderTaskRef : renderTaskRef;
+    
     if (!doc || !canvas || !viewportEl) return;
 
     const w = viewportEl.clientWidth;
@@ -297,43 +303,88 @@ export default function Teacher() {
       return;
     }
 
+    // CRITICAL: Cancel any ongoing render on this canvas
+    if (taskRef.current) {
+      try {
+        taskRef.current.cancel();
+      } catch (e) {
+        console.log("Cancel render task:", e);
+      }
+      taskRef.current = null;
+    }
+
     const myRenderId = ++renderIdRef.current;
     setRendering(true);
     setPdfErr("");
 
     try {
       const pdfPage = await doc.getPage(pageNum);
-      const padding = fullscreen ? 0 : 22;
+      
+      // Check if this render is still valid
+      if (myRenderId !== renderIdRef.current) return;
+      
+      // Calculate padding based on mode - REDUCED for fullscreen to use more space
+      const padding = fullscreen ? 20 : 22;
       const maxW = Math.max(240, viewportEl.clientWidth - padding);
       const maxH = Math.max(240, viewportEl.clientHeight - padding);
+      
+      // Get viewport at scale 1
       const v1 = pdfPage.getViewport({ scale: 1 });
+      
+      // Calculate scale to fit
       const scale = Math.min(maxW / v1.width, maxH / v1.height);
       const viewport = pdfPage.getViewport({ scale });
+      
       const dpr = window.devicePixelRatio || 1;
 
+      // Set canvas dimensions
       canvas.width = Math.max(1, Math.floor(viewport.width * dpr));
       canvas.height = Math.max(1, Math.floor(viewport.height * dpr));
       canvas.style.width = `${Math.floor(viewport.width)}px`;
       canvas.style.height = `${Math.floor(viewport.height)}px`;
 
       const ctx = canvas.getContext("2d");
+      
+      // Clear and set transform
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-      await pdfPage.render({ canvasContext: ctx, viewport }).promise;
+      // Check again before rendering
       if (myRenderId !== renderIdRef.current) return;
-    } catch {
-      setPdfErr("Couldn't render this slide.");
+
+      // Start the render and save the task
+      const renderTask = pdfPage.render({ canvasContext: ctx, viewport });
+      taskRef.current = renderTask;
+
+      // Wait for render to complete
+      await renderTask.promise;
+      
+      // Clear the task reference on success
+      if (taskRef.current === renderTask) {
+        taskRef.current = null;
+      }
+      
+      if (myRenderId !== renderIdRef.current) return;
+    } catch (err) {
+      // Ignore cancellation errors
+      if (err.name === 'RenderingCancelledException') {
+        console.log("Render cancelled (expected)");
+        return;
+      }
+      console.error("PDF render error:", err);
+      if (myRenderId === renderIdRef.current) {
+        setPdfErr("Couldn't render this slide.");
+      }
     } finally {
       if (myRenderId === renderIdRef.current) setRendering(false);
     }
   };
 
   useEffect(() => {
-    if (!pdfDoc) return;
+    if (!pdfDoc || isFullscreen) return; // Don't render normal canvas when fullscreen is open
     renderPageToCanvas(pdfDoc, page, false);
-  }, [pdfDoc, page]);
+  }, [pdfDoc, page, isFullscreen]);
 
   useEffect(() => {
     if (!isFullscreen || !pdfDoc) return;
@@ -356,9 +407,12 @@ export default function Teacher() {
     const onResize = () => {
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => {
-        renderPageToCanvas(pdfDoc, page, false);
         if (isFullscreen) {
+          // Only render fullscreen canvas
           waitForStableBox(fsViewportRef.current, 10).then(() => renderPageToCanvas(pdfDoc, page, true));
+        } else {
+          // Only render normal canvas
+          renderPageToCanvas(pdfDoc, page, false);
         }
       });
     };
@@ -412,7 +466,20 @@ export default function Teacher() {
   };
 
   useEffect(() => {
-    return () => stopCaptions();
+    return () => {
+      // Cancel any ongoing renders when unmounting
+      if (renderTaskRef.current) {
+        try {
+          renderTaskRef.current.cancel();
+        } catch (e) {}
+      }
+      if (fsRenderTaskRef.current) {
+        try {
+          fsRenderTaskRef.current.cancel();
+        } catch (e) {}
+      }
+      stopCaptions();
+    };
   }, []);
 
   const startLocalCaptions = () => {
@@ -543,13 +610,24 @@ export default function Teacher() {
 
   const openFullscreen = async () => {
     setIsFullscreen(true);
+    onFullscreenChange?.(true); // Notify parent to hide header
     requestAnimationFrame(async () => {
       await waitForStableBox(fsViewportRef.current);
       if (pdfDoc) renderPageToCanvas(pdfDoc, page, true);
     });
   };
 
-  const closeFullscreen = () => setIsFullscreen(false);
+  const closeFullscreen = () => {
+    // Cancel fullscreen render task
+    if (fsRenderTaskRef.current) {
+      try {
+        fsRenderTaskRef.current.cancel();
+      } catch (e) {}
+      fsRenderTaskRef.current = null;
+    }
+    setIsFullscreen(false);
+    onFullscreenChange?.(false); // Notify parent to show header
+  };
 
   const layoutStyle = isNarrow ? styles.layoutNarrow : styles.layoutWide;
 
@@ -565,15 +643,15 @@ export default function Teacher() {
   };
 
   const shellStyle = isNarrow
-    ? { ...styles.shell, padding: shellPad, height: "auto", minHeight: "100%", overflow: "visible" }
-    : { ...styles.shell, padding: shellPad, height: "100%", overflow: "visible" };
+    ? { ...styles.shell, padding: shellPad, height: "auto", minHeight: "calc(100vh - var(--header-h))", overflow: "visible" }
+    : { ...styles.shell, padding: shellPad, height: "calc(100vh - var(--header-h))", overflow: "visible" };
 
   const layoutCombined = isNarrow
     ? { ...styles.layoutBase, ...layoutStyle, gap, height: "auto", minHeight: 0, alignContent: "start" }
     : { ...styles.layoutBase, ...layoutStyle, gap, height: "100%" };
 
   const slidesAreaStyle = isNarrow
-    ? { ...styles.slidesArea, height: "clamp(360px, 52vh, 680px)" }
+    ? { ...styles.slidesArea, height: "clamp(500px, 65vh, 850px)" }
     : { ...styles.slidesArea, height: "100%" };
 
   const rightRailStyle = isNarrow
@@ -769,9 +847,13 @@ export default function Teacher() {
       {isFullscreen && (
         <div role="dialog" aria-modal="true" style={styles.fsOverlay}>
           <div style={styles.fsCard}>
-            <button type="button" onClick={closeFullscreen} style={styles.fsCloseBtn} aria-label="Exit fullscreen">
-              <span style={styles.fsCloseX}>×</span>
-              <span style={styles.fsCloseText}>Close</span>
+            <button 
+              type="button" 
+              onClick={closeFullscreen} 
+              style={styles.fsCloseBtn} 
+              aria-label="Exit fullscreen"
+            >
+              Exit
             </button>
 
             <div ref={fsViewportRef} style={styles.fsViewport}>
@@ -784,9 +866,9 @@ export default function Teacher() {
                   type="button"
                   onClick={prev}
                   disabled={!canPrev}
-                  style={{ ...styles.fsNavBtn, opacity: canPrev ? 1 : 0.45 }}
+                  style={{ ...styles.fsNavBtn, opacity: canPrev ? 1 : 0.4 }}
                 >
-                  Prev
+                  ← Prev
                 </button>
                 <div style={styles.fsCounter}>
                   Slide {page} / {numPages}
@@ -795,9 +877,9 @@ export default function Teacher() {
                   type="button"
                   onClick={next}
                   disabled={!canNext}
-                  style={{ ...styles.fsNavBtn, opacity: canNext ? 1 : 0.45 }}
+                  style={{ ...styles.fsNavBtn, opacity: canNext ? 1 : 0.4 }}
                 >
-                  Next
+                  Next →
                 </button>
               </div>
 
@@ -813,18 +895,16 @@ export default function Teacher() {
 
 const styles = {
   page: {
-    minHeight: "calc(100vh - var(--header-h))",
-    height: "calc(100vh - var(--header-h))",
-    paddingTop: "var(--header-h)",
-    boxSizing: "border-box",
-    backgroundColor: COLORS.pageBg,
-    overflowX: "hidden",
-    transition: "opacity 320ms ease, transform 420ms ease",
-  },
+  minHeight: "100vh",
+  paddingTop: "var(--header-h)",
+  boxSizing: "border-box",
+  backgroundColor: COLORS.pageBg,
+  overflowX: "hidden",
+  transition: "opacity 320ms ease, transform 420ms ease",
+},
   shell: {
     maxWidth: "1440px",
     margin: "0 auto",
-    padding: "clamp(12px, 2.2vw, 20px) 16px",
     boxSizing: "border-box",
   },
   layoutBase: {
@@ -1039,7 +1119,7 @@ const styles = {
   transcriptArea: {
     width: "100%",
     flex: "1 1 0",
-    minHeight: "clamp(180px, 34vh, 360px)",
+    minHeight: "clamp(280px, 48vh, 520px)",
     borderRadius: "22px",
     backgroundColor: COLORS.beigeDark,
     border: "1px solid rgba(0,0,0,0.08)",
@@ -1283,7 +1363,7 @@ const styles = {
     position: "fixed",
     inset: 0,
     backgroundColor: "rgba(5, 6, 7, 0.96)",
-    zIndex: 80,
+    zIndex: 999,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
@@ -1298,37 +1378,28 @@ const styles = {
     justifyContent: "center",
   },
   fsCloseBtn: {
-    position: "absolute",
-    top: "clamp(12px, 2vw, 18px)",
-    right: "clamp(12px, 2vw, 18px)",
-    zIndex: 90,
-    border: "1px solid rgba(255,255,255,0.18)",
-    backgroundColor: "rgba(210, 48, 48, 0.92)",
-    borderRadius: "999px",
-    padding: "10px 14px",
-    cursor: "pointer",
-    color: "rgba(255,255,255,0.96)",
-    display: "flex",
-    alignItems: "center",
-    gap: "10px",
-    boxShadow: "0 18px 46px rgba(0,0,0,0.40)",
-    backdropFilter: "blur(8px)",
-    WebkitBackdropFilter: "blur(8px)",
-  },
-  fsCloseX: {
-    fontSize: "22px",
-    fontWeight: 900,
-    lineHeight: 1,
-    marginTop: "-1px",
-  },
-  fsCloseText: {
-    fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "13px",
-    fontWeight: 900,
-    letterSpacing: "0.02em",
-    textTransform: "uppercase",
-    lineHeight: 1,
-  },
+  position: "absolute",
+  top: "clamp(14px, 1.8vw, 18px)",
+  right: "clamp(14px, 1.8vw, 18px)",
+  zIndex: 1000,
+  border: "1px solid rgba(255,182,193,0.40)",
+  backgroundColor: "rgba(255,182,193,0.25)",
+  borderRadius: "14px",
+  padding: "clamp(8px, 1.2vw, 10px) clamp(14px, 2vw, 18px)",
+  cursor: "pointer",
+  fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
+  fontSize: "clamp(13px, 1.4vw, 15px)",
+  fontWeight: 700,
+  letterSpacing: "0.02em",
+  color: "rgba(255,105,130,0.95)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  boxShadow: "0 4px 12px rgba(255,105,130,0.15)",
+  backdropFilter: "blur(10px)",
+  WebkitBackdropFilter: "blur(10px)",
+  transition: "all 0.2s ease",
+},
   fsViewport: {
     position: "relative",
     width: "100%",
@@ -1344,7 +1415,7 @@ const styles = {
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    padding: 0,
+    padding: "clamp(12px, 1.5vw, 20px)",
     boxSizing: "border-box",
   },
   fsControls: {
@@ -1357,29 +1428,31 @@ const styles = {
     justifyContent: "space-between",
     gap: "clamp(12px, 2vw, 20px)",
     pointerEvents: "none",
+    zIndex: 1000,
   },
   fsNavBtn: {
     pointerEvents: "auto",
-    border: "1px solid rgba(255,255,255,0.18)",
-    backgroundColor: "rgba(0,0,0,0.62)",
+    border: "1px solid rgba(44,177,166,0.40)",
+    backgroundColor: "rgba(255,255,255,0.92)",
     borderRadius: "16px",
-    padding: "clamp(10px, 1.5vw, 14px) clamp(12px, 2vw, 18px)",
+    padding: "clamp(10px, 1.5vw, 14px) clamp(14px, 2.2vw, 20px)",
     cursor: "pointer",
     fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "clamp(13px, 1.4vw, 16px)",
+    fontSize: "clamp(13px, 1.5vw, 17px)",
     fontWeight: 900,
-    color: "rgba(255,255,255,0.92)",
+    color: COLORS.teal,
     backdropFilter: "blur(8px)",
     WebkitBackdropFilter: "blur(8px)",
+    transition: "background-color 0.2s ease",
   },
   fsCounter: {
     pointerEvents: "none",
     backgroundColor: "rgba(44,177,166,0.82)",
     border: "1px solid rgba(44,177,166,0.40)",
     borderRadius: "999px",
-    padding: "clamp(10px, 1.5vw, 14px) clamp(14px, 2vw, 18px)",
+    padding: "clamp(10px, 1.5vw, 14px) clamp(16px, 2.5vw, 22px)",
     fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "clamp(13px, 1.4vw, 16px)",
+    fontSize: "clamp(13px, 1.5vw, 17px)",
     fontWeight: 950,
     color: "rgba(255,255,255,0.96)",
     backdropFilter: "blur(8px)",
@@ -1387,29 +1460,31 @@ const styles = {
   },
   fsStatus: {
     position: "absolute",
-    top: "clamp(14px, 2vw, 20px)",
+    top: "clamp(14px, 2vw, 24px)",
     left: "50%",
     transform: "translateX(-50%)",
     backgroundColor: "rgba(0,0,0,0.74)",
     color: COLORS.white,
-    padding: "8px 12px",
+    padding: "8px 14px",
     borderRadius: "999px",
     fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "clamp(11px, 1.2vw, 13px)",
+    fontSize: "clamp(11px, 1.2vw, 14px)",
     fontWeight: 900,
+    zIndex: 1000,
   },
   fsError: {
     position: "absolute",
     left: "clamp(14px, 2vw, 24px)",
     right: "clamp(14px, 2vw, 24px)",
-    top: "clamp(14px, 2vw, 20px)",
+    top: "clamp(14px, 2vw, 24px)",
     backgroundColor: "rgba(232,91,91,0.92)",
     color: COLORS.white,
-    padding: "12px 16px",
+    padding: "12px 18px",
     borderRadius: "16px",
     fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "clamp(12px, 1.3vw, 14px)",
+    fontSize: "clamp(12px, 1.3vw, 15px)",
     fontWeight: 850,
     textAlign: "center",
+    zIndex: 1000,
   },
 };

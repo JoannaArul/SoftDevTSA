@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Header from "./components/Header";
 import Home from "./pages/Home";
@@ -8,14 +9,16 @@ import Professional from "./pages/Professional";
 import FamilyAndFriends from "./pages/FamilyAndFriends";
 
 export default function App() {
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
   return (
     <BrowserRouter>
-      <Header />
+      <Header hidden={isFullscreen} />
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/host" element={<Host />} />
 
-        <Route path="/teacher" element={<Teacher />} />
+        <Route path="/teacher" element={<Teacher onFullscreenChange={setIsFullscreen} />} />
         <Route path="/join" element={<Join />} />
 
         <Route path="/professional" element={<Professional />} />

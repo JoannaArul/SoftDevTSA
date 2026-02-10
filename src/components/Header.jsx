@@ -17,7 +17,7 @@ const NAV_LINKS = [
   { to: "/join", label: "Join" },
 ];
 
-export default function Header() {
+export default function Header({ hidden = false }) {
   const [scrolled, setScrolled] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const location = useLocation();
@@ -92,6 +92,8 @@ export default function Header() {
         : "rgba(0,0,0,0.06)"
       : "transparent",
   });
+
+  if (hidden) return null;
 
   return (
     <header
@@ -203,8 +205,6 @@ const styles = {
     maxWidth: "55vw",
   },
 
-  // MATCHES YOUR WORKING NEXUS HEADER IDEA:
-  // make the actual image HUGE and let overflow:hidden crop it so it "fills" the header
   logoImg: {
     height: "190px",
     width: "auto",
@@ -213,7 +213,6 @@ const styles = {
     transition: "filter 400ms ease, transform 250ms ease",
   },
 
-  // invert on scroll (gray header)
   logoImgScrolled: {
     filter: "brightness(0) invert(1)",
   },

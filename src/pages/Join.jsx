@@ -285,6 +285,12 @@ export default function Join() {
 
   const closeFullscreen = () => setIsFullscreen(false);
 
+  const handleKeyPress = (e) => {
+    if (e.key === "Enter") {
+      connect(code);
+    }
+  };
+
   const layoutStyle = isNarrow ? styles.layoutNarrow : styles.layoutWide;
 
   return (
@@ -306,6 +312,7 @@ export default function Join() {
                 <input
                   value={code}
                   onChange={(e) => setCode(cleanCode(e.target.value))}
+                  onKeyPress={handleKeyPress}
                   placeholder="ABC123"
                   style={styles.joinInput}
                   maxLength={6}
