@@ -69,17 +69,17 @@ export default function Home() {
     () => [
       {
         title: "Upload PDF",
-        desc: "Import your slideshow as a PDF so students see the same slide you’re presenting.",
+        desc: "Upload your slideshow as a PDF so every student sees the exact same content you are presenting in real time. This ensures formatting stays consistent across all devices and screen sizes. Students can follow along without worrying about missing slides. It creates a reliable foundation for clear and organized instruction.",
         variant: "light",
       },
       {
         title: "Start Session",
-        desc: "Launch a live room and instantly get a join code so students can enter and follow along.",
+        desc: "Create a live session in seconds and receive a unique join code to share with your class. Students can enter instantly without needing an account or complicated setup. Once inside, they are automatically synced to your presentation. This makes starting class fast, simple, and stress free.",
         variant: "teal",
       },
       {
         title: "Speak",
-        desc: "Teach naturally—captions appear live and the transcript updates as students join.",
+        desc: "Begin teaching naturally while live captions appear for students. A real time transcript updates continuously as you speak and as students join. This supports accessibility and helps students stay focused even if they miss a moment. Everyone can learn at their own pace with written and spoken content working together.",
         variant: "light",
       },
     ],

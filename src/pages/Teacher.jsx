@@ -125,7 +125,7 @@ export default function Teacher() {
 
   useEffect(() => {
     const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    if (isFullscreen) document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = prev || "";
     };
@@ -482,14 +482,6 @@ export default function Teacher() {
     }
   };
 
-  const pickMimeType = () => {
-    const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/ogg"];
-    for (const t of candidates) {
-      if (window.MediaRecorder && MediaRecorder.isTypeSupported?.(t)) return t;
-    }
-    return "";
-  };
-
   const startHostedCaptions = async () => {
     setCaptionStatus("Hosted captions are currently disabled.");
     setMicOn(false);
@@ -564,17 +556,35 @@ export default function Teacher() {
   const shellPad = isShort ? "10px 12px" : "clamp(12px, 2.2vw, 20px) 16px";
   const gap = isShort ? "12px" : "14px";
 
+  const pageStyle = {
+    ...styles.page,
+    opacity: mounted ? 1 : 0,
+    transform: mounted ? "translateY(0px)" : "translateY(10px)",
+    overflowY: isFullscreen ? "hidden" : "auto",
+    WebkitOverflowScrolling: "touch",
+  };
+
+  const shellStyle = isNarrow
+    ? { ...styles.shell, padding: shellPad, height: "auto", minHeight: "100%", overflow: "visible" }
+    : { ...styles.shell, padding: shellPad, height: "100%", overflow: "visible" };
+
+  const layoutCombined = isNarrow
+    ? { ...styles.layoutBase, ...layoutStyle, gap, height: "auto", minHeight: 0, alignContent: "start" }
+    : { ...styles.layoutBase, ...layoutStyle, gap, height: "100%" };
+
+  const slidesAreaStyle = isNarrow
+    ? { ...styles.slidesArea, height: "clamp(360px, 52vh, 680px)" }
+    : { ...styles.slidesArea, height: "100%" };
+
+  const rightRailStyle = isNarrow
+    ? { ...styles.rightRail, height: "auto", overflow: "visible" }
+    : { ...styles.rightRail, height: "100%", overflow: "hidden" };
+
   return (
-    <main
-      style={{
-        ...styles.page,
-        opacity: mounted ? 1 : 0,
-        transform: mounted ? "translateY(0px)" : "translateY(10px)",
-      }}
-    >
-      <div style={{ ...styles.shell, padding: shellPad }}>
-        <div style={{ ...styles.layoutBase, ...layoutStyle, gap }}>
-          <section style={styles.slidesArea} aria-label="Slides">
+    <main style={pageStyle}>
+      <div style={shellStyle}>
+        <div style={layoutCombined}>
+          <section style={slidesAreaStyle} aria-label="Slides">
             <div
               ref={viewportRef}
               onDrop={onDrop}
@@ -656,7 +666,7 @@ export default function Teacher() {
             </div>
           </section>
 
-          <aside style={{ ...styles.rightRail, gap }} aria-label="Live transcript and session controls">
+          <aside style={{ ...rightRailStyle, gap }} aria-label="Live transcript and session controls">
             <section style={styles.transcriptArea} aria-label="Transcript">
               <div style={styles.transcriptHeader}>
                 <div style={styles.transcriptTitle}>Live Transcript</div>
@@ -808,19 +818,16 @@ const styles = {
     paddingTop: "var(--header-h)",
     boxSizing: "border-box",
     backgroundColor: COLORS.pageBg,
-    overflow: "hidden",
+    overflowX: "hidden",
     transition: "opacity 320ms ease, transform 420ms ease",
   },
   shell: {
-    height: "100%",
     maxWidth: "1440px",
     margin: "0 auto",
     padding: "clamp(12px, 2.2vw, 20px) 16px",
     boxSizing: "border-box",
-    overflow: "hidden",
   },
   layoutBase: {
-    height: "100%",
     display: "grid",
     gap: "14px",
     alignItems: "stretch",
@@ -832,14 +839,13 @@ const styles = {
   },
   layoutNarrow: {
     gridTemplateColumns: "1fr",
-    gridTemplateRows: "minmax(0, 1.2fr) minmax(0, 1fr)",
+    gridTemplateRows: "auto auto",
   },
   slidesArea: {
     width: "100%",
     borderRadius: "22px",
     overflow: "hidden",
     minHeight: 0,
-    height: "100%",
   },
   slideViewport: {
     position: "relative",
@@ -1025,17 +1031,15 @@ const styles = {
   },
   rightRail: {
     width: "100%",
-    height: "100%",
     display: "flex",
     flexDirection: "column",
     gap: "14px",
     minHeight: 0,
-    overflow: "hidden",
   },
   transcriptArea: {
     width: "100%",
     flex: "1 1 0",
-    minHeight: 0,
+    minHeight: "clamp(180px, 34vh, 360px)",
     borderRadius: "22px",
     backgroundColor: COLORS.beigeDark,
     border: "1px solid rgba(0,0,0,0.08)",
@@ -1114,17 +1118,17 @@ const styles = {
     backgroundColor: "rgba(255,255,255,0.92)",
     border: "1px solid rgba(0,0,0,0.08)",
     boxShadow: "0 4px 8px rgba(0,0,0,0.06)",
-    padding: "10px",
+    padding: "8px",
     boxSizing: "border-box",
     overflow: "hidden",
     display: "flex",
     flexDirection: "column",
-    gap: "8px",
+    gap: "6px",
   },
   dockHeader: {
     display: "grid",
-    gap: "4px",
-    padding: "4px 4px 4px",
+    gap: "3px",
+    padding: "2px 4px 2px",
     flexShrink: 0,
   },
   dockTitle: {
@@ -1149,23 +1153,23 @@ const styles = {
   },
   compactTile: {
     borderRadius: "14px",
-    padding: "clamp(8px, 1.2vw, 10px)",
+    padding: "clamp(7px, 1.1vw, 9px)",
     cursor: "pointer",
     display: "flex",
     flexDirection: "column",
     alignItems: "center",
     justifyContent: "center",
-    gap: "4px",
+    gap: "3px",
     textAlign: "center",
     boxShadow: "none",
     outline: "none",
     border: "1px solid rgba(0,0,0,0.10)",
     backgroundColor: "rgba(0,0,0,0.04)",
-    minHeight: "66px",
+    minHeight: "clamp(52px, 7.8vh, 64px)",
   },
   compactIcon: {
     fontFamily: "Merriweather, serif",
-    fontSize: "clamp(18px, 2.2vw, 24px)",
+    fontSize: "clamp(16px, 2.0vw, 22px)",
     fontWeight: 900,
     color: "rgba(0,0,0,0.84)",
     lineHeight: 1,
@@ -1183,7 +1187,7 @@ const styles = {
     gridColumn: "1 / span 2",
     border: "none",
     borderRadius: "16px",
-    padding: "clamp(10px, 1.4vw, 12px)",
+    padding: "clamp(9px, 1.2vw, 11px)",
     cursor: "pointer",
     background: `linear-gradient(135deg, ${COLORS.teal}, rgba(44,177,166,0.82))`,
     color: COLORS.white,
@@ -1192,13 +1196,13 @@ const styles = {
     flexDirection: "column",
     alignItems: "center",
     justifyContent: "center",
-    gap: "4px",
+    gap: "3px",
     textAlign: "center",
-    minHeight: "72px",
+    minHeight: "clamp(58px, 8.6vh, 70px)",
   },
   joinCompactCode: {
     fontFamily: "Merriweather, serif",
-    fontSize: "clamp(18px, 2.4vw, 24px)",
+    fontSize: "clamp(17px, 2.2vw, 22px)",
     fontWeight: 900,
     letterSpacing: "0.08em",
     lineHeight: 1,
