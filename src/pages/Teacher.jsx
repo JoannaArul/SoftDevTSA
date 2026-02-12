@@ -26,9 +26,7 @@ async function uploadPdfToRoom(file, code, numPages) {
   const form = new FormData();
   form.append("pdf", file);
   const res = await fetch(
-    `${BACKEND_HTTP}/upload?code=${encodeURIComponent(code)}&numPages=${encodeURIComponent(
-      String(numPages || 0)
-    )}`,
+    `${BACKEND_HTTP}/upload?code=${encodeURIComponent(code)}&numPages=${encodeURIComponent(String(numPages || 0))}`,
     { method: "POST", body: form }
   );
   if (!res.ok) throw new Error("upload failed");
@@ -77,6 +75,7 @@ export default function Teacher({ onFullscreenChange }) {
 
   const [dragOver, setDragOver] = useState(false);
   const [pdfName, setPdfName] = useState("");
+  const [pdfUrl, setPdfUrl] = useState("");
   const [pdfDoc, setPdfDoc] = useState(null);
   const [numPages, setNumPages] = useState(0);
   const [page, setPage] = useState(1);
@@ -146,9 +145,7 @@ export default function Teacher({ onFullscreenChange }) {
     if (transcriptText) return transcriptText;
     if (captionStatus) return captionStatus;
     if (wsErr && !pdfDoc) return "Ready. Upload slides to begin.";
-    return pdfDoc
-      ? "Turn on your mic to start live captions."
-      : "Upload slides to start. Live captions and transcript will appear here.";
+    return pdfDoc ? "Turn on your mic to start live captions." : "Upload slides to start. Live captions and transcript will appear here.";
   }, [pdfDoc, transcriptText, captionStatus, wsErr]);
 
   const connectRoom = (code) => {
@@ -166,8 +163,8 @@ export default function Teacher({ onFullscreenChange }) {
 
       ws.onopen = () => {
         setWsErr("");
-        if (pdfDoc) {
-          wsSend(ws, { type: "pdf", url: "", name: pdfName || "", numPages: numPages || 0 });
+        if (pdfDoc && pdfUrl) {
+          wsSend(ws, { type: "pdf", url: pdfUrl, name: pdfName || "", numPages: numPages || 0 });
           wsSend(ws, { type: "slide", page, numPages });
         } else {
           wsSend(ws, { type: "slide", page: 1, numPages: 0 });
@@ -202,7 +199,7 @@ export default function Teacher({ onFullscreenChange }) {
       } catch {}
       wsRef.current = null;
     };
-  }, [joinCode]);
+  }, [joinCode, pdfDoc, pdfUrl, pdfName, page, numPages]);
 
   const broadcastSlide = (code, pageNum, total) => {
     const ws = wsRef.current;
@@ -230,6 +227,7 @@ export default function Teacher({ onFullscreenChange }) {
     setPdfErr("");
     setLoadingPdf(true);
     setPdfName(file.name);
+    setPdfUrl("");
     setPdfDoc(null);
     setNumPages(0);
     setPage(1);
@@ -249,6 +247,8 @@ export default function Teacher({ onFullscreenChange }) {
         const name = data?.name || file.name;
 
         if (url) {
+          setPdfUrl(url);
+          setPdfName(name);
           wsSend(wsRef.current, { type: "pdf", url, name, numPages: doc.numPages });
           wsSend(wsRef.current, { type: "slide", page: 1, numPages: doc.numPages });
         } else {
@@ -293,7 +293,7 @@ export default function Teacher({ onFullscreenChange }) {
     const viewportEl = fullscreen ? fsViewportRef.current : viewportRef.current;
     const canvas = fullscreen ? fsCanvasRef.current : canvasRef.current;
     const taskRef = fullscreen ? fsRenderTaskRef : renderTaskRef;
-    
+
     if (!doc || !canvas || !viewportEl) return;
 
     const w = viewportEl.clientWidth;
@@ -319,18 +319,18 @@ export default function Teacher({ onFullscreenChange }) {
 
     try {
       const pdfPage = await doc.getPage(pageNum);
-      
+
       if (myRenderId !== renderIdRef.current) return;
-      
+
       const padding = fullscreen ? 4 : 22;
       const maxW = Math.max(240, viewportEl.clientWidth - padding);
       const maxH = Math.max(240, viewportEl.clientHeight - padding);
-      
+
       const v1 = pdfPage.getViewport({ scale: 1 });
-      
+
       const scale = Math.min(maxW / v1.width, maxH / v1.height);
       const viewport = pdfPage.getViewport({ scale });
-      
+
       const dpr = window.devicePixelRatio || 1;
 
       canvas.width = Math.max(1, Math.floor(viewport.width * dpr));
@@ -339,7 +339,7 @@ export default function Teacher({ onFullscreenChange }) {
       canvas.style.height = `${Math.floor(viewport.height)}px`;
 
       const ctx = canvas.getContext("2d");
-      
+
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -350,14 +350,14 @@ export default function Teacher({ onFullscreenChange }) {
       taskRef.current = renderTask;
 
       await renderTask.promise;
-      
+
       if (taskRef.current === renderTask) {
         taskRef.current = null;
       }
-      
+
       if (myRenderId !== renderIdRef.current) return;
     } catch (err) {
-      if (err.name === 'RenderingCancelledException') {
+      if (err.name === "RenderingCancelledException") {
         console.log("Render cancelled (expected)");
         return;
       }
@@ -465,6 +465,7 @@ export default function Teacher({ onFullscreenChange }) {
         } catch (e) {}
       }
       stopCaptions();
+      onFullscreenChange?.(false);
     };
   }, []);
 
@@ -635,13 +636,9 @@ export default function Teacher({ onFullscreenChange }) {
     ? { ...styles.layoutBase, ...layoutStyle, gap, height: "auto", minHeight: 0, alignContent: "start" }
     : { ...styles.layoutBase, ...layoutStyle, gap, height: "100%" };
 
-  const slidesAreaStyle = isNarrow
-    ? { ...styles.slidesArea, height: "clamp(500px, 65vh, 850px)" }
-    : { ...styles.slidesArea, height: "100%" };
+  const slidesAreaStyle = isNarrow ? { ...styles.slidesArea, height: "clamp(500px, 65vh, 850px)" } : { ...styles.slidesArea, height: "100%" };
 
-  const rightRailStyle = isNarrow
-    ? { ...styles.rightRail, height: "auto", overflow: "visible" }
-    : { ...styles.rightRail, height: "100%", overflow: "hidden" };
+  const rightRailStyle = isNarrow ? { ...styles.rightRail, height: "auto", overflow: "visible" } : { ...styles.rightRail, height: "100%", overflow: "hidden" };
 
   return (
     <main style={pageStyle}>
@@ -659,13 +656,7 @@ export default function Teacher({ onFullscreenChange }) {
                 boxShadow: dragOver ? "0 18px 42px rgba(44,177,166,0.20)" : styles.slideViewport.boxShadow,
               }}
             >
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="application/pdf"
-                onChange={onPickFile}
-                style={{ display: "none" }}
-              />
+              <input ref={fileInputRef} type="file" accept="application/pdf" onChange={onPickFile} style={{ display: "none" }} />
 
               {!pdfDoc ? (
                 <button type="button" onClick={openPicker} style={styles.uploadOverlayBtn} aria-label="Upload PDF">
@@ -698,12 +689,7 @@ export default function Teacher({ onFullscreenChange }) {
 
                   <div style={styles.slideControls}>
                     <div style={{ display: "flex", gap: "10px", alignItems: "center", pointerEvents: "auto" }}>
-                      <button
-                        type="button"
-                        onClick={prev}
-                        disabled={!canPrev}
-                        style={{ ...styles.navBtn, opacity: canPrev ? 1 : 0.45 }}
-                      >
+                      <button type="button" onClick={prev} disabled={!canPrev} style={{ ...styles.navBtn, opacity: canPrev ? 1 : 0.45 }}>
                         Prev
                       </button>
 
@@ -711,12 +697,7 @@ export default function Teacher({ onFullscreenChange }) {
                         Slide {page} / {numPages}
                       </div>
 
-                      <button
-                        type="button"
-                        onClick={next}
-                        disabled={!canNext}
-                        style={{ ...styles.navBtn, opacity: canNext ? 1 : 0.45 }}
-                      >
+                      <button type="button" onClick={next} disabled={!canNext} style={{ ...styles.navBtn, opacity: canNext ? 1 : 0.45 }}>
                         Next
                       </button>
                     </div>
@@ -774,7 +755,7 @@ export default function Teacher({ onFullscreenChange }) {
             <section style={styles.controlDock} aria-label="Session controls">
               <div style={styles.dockHeader}>
                 <div style={styles.dockTitle}>Session Controls</div>
-                <div style={styles.dockSub}>{wsErr ? "Backend connection hiccup" : "Live session ready"}</div>
+                {!wsErr && <div style={styles.dockSub}>Live session ready</div>}
               </div>
 
               <div style={styles.dockGrid}>
@@ -832,12 +813,7 @@ export default function Teacher({ onFullscreenChange }) {
       {isFullscreen && (
         <div role="dialog" aria-modal="true" style={styles.fsOverlay}>
           <div style={styles.fsCard}>
-            <button 
-              type="button" 
-              onClick={closeFullscreen} 
-              style={styles.fsCloseBtn} 
-              aria-label="Exit fullscreen"
-            >
+            <button type="button" onClick={closeFullscreen} style={styles.fsCloseBtn} aria-label="Exit fullscreen">
               Exit
             </button>
 
@@ -848,23 +824,13 @@ export default function Teacher({ onFullscreenChange }) {
             </div>
 
             <div style={styles.fsControls}>
-              <button
-                type="button"
-                onClick={prev}
-                disabled={!canPrev}
-                style={{ ...styles.fsNavBtn, opacity: canPrev ? 1 : 0.4 }}
-              >
+              <button type="button" onClick={prev} disabled={!canPrev} style={{ ...styles.fsNavBtn, opacity: canPrev ? 1 : 0.4 }}>
                 ←
               </button>
               <div style={styles.fsCounter}>
                 {page}/{numPages}
               </div>
-              <button
-                type="button"
-                onClick={next}
-                disabled={!canNext}
-                style={{ ...styles.fsNavBtn, opacity: canNext ? 1 : 0.4 }}
-              >
+              <button type="button" onClick={next} disabled={!canNext} style={{ ...styles.fsNavBtn, opacity: canNext ? 1 : 0.4 }}>
                 →
               </button>
             </div>
@@ -1409,11 +1375,11 @@ const styles = {
     position: "fixed",
     left: "50%",
     transform: "translateX(-50%)",
-    bottom: "8px",
+    bottom: "clamp(12px, 3vh, 20px)",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    gap: "8px",
+    gap: "clamp(6px, 2vw, 10px)",
     pointerEvents: "none",
     zIndex: 1002,
   },
@@ -1422,11 +1388,13 @@ const styles = {
     border: "1px solid rgba(44,177,166,0.40)",
     backgroundColor: "rgba(255,255,255,0.92)",
     borderRadius: "50%",
-    width: "44px",
-    height: "44px",
+    width: "clamp(40px, 8vw, 50px)",
+    height: "clamp(40px, 8vw, 50px)",
+    minWidth: "40px",
+    minHeight: "40px",
     cursor: "pointer",
     fontFamily: "Arial, sans-serif",
-    fontSize: "20px",
+    fontSize: "clamp(18px, 4vw, 22px)",
     fontWeight: 900,
     color: COLORS.teal,
     backdropFilter: "blur(8px)",
@@ -1435,6 +1403,7 @@ const styles = {
     alignItems: "center",
     justifyContent: "center",
     padding: 0,
+    touchAction: "manipulation",
   },
   fsCounter: {
     pointerEvents: "none",

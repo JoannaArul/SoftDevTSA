@@ -19,7 +19,7 @@ export default function App() {
         <Route path="/host" element={<Host />} />
 
         <Route path="/teacher" element={<Teacher onFullscreenChange={setIsFullscreen} />} />
-        <Route path="/join" element={<Join />} />
+        <Route path="/join" element={<Join onFullscreenChange={setIsFullscreen} />} />
 
         <Route path="/professional" element={<Professional />} />
         <Route path="/family-and-friends" element={<FamilyAndFriends />} />
