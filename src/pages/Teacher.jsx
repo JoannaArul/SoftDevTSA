@@ -61,8 +61,8 @@ export default function Teacher({ onFullscreenChange }) {
   const fsViewportRef = useRef(null);
   const fsCanvasRef = useRef(null);
   const renderIdRef = useRef(0);
-  const renderTaskRef = useRef(null); // Track normal canvas render task
-  const fsRenderTaskRef = useRef(null); // Track fullscreen canvas render task
+  const renderTaskRef = useRef(null);
+  const fsRenderTaskRef = useRef(null);
   const recognitionRef = useRef(null);
   const mediaStreamRef = useRef(null);
   const mediaRecorderRef = useRef(null);
@@ -298,12 +298,12 @@ export default function Teacher({ onFullscreenChange }) {
 
     const w = viewportEl.clientWidth;
     const h = viewportEl.clientHeight;
+
     if ((w < 120 || h < 120) && triesLeft > 0) {
       requestAnimationFrame(() => renderPageToCanvas(doc, pageNum, fullscreen, triesLeft - 1));
       return;
     }
 
-    // CRITICAL: Cancel any ongoing render on this canvas
     if (taskRef.current) {
       try {
         taskRef.current.cancel();
@@ -320,24 +320,19 @@ export default function Teacher({ onFullscreenChange }) {
     try {
       const pdfPage = await doc.getPage(pageNum);
       
-      // Check if this render is still valid
       if (myRenderId !== renderIdRef.current) return;
       
-      // Calculate padding based on mode - REDUCED for fullscreen to use more space
-      const padding = fullscreen ? 20 : 22;
+      const padding = fullscreen ? 4 : 22;
       const maxW = Math.max(240, viewportEl.clientWidth - padding);
       const maxH = Math.max(240, viewportEl.clientHeight - padding);
       
-      // Get viewport at scale 1
       const v1 = pdfPage.getViewport({ scale: 1 });
       
-      // Calculate scale to fit
       const scale = Math.min(maxW / v1.width, maxH / v1.height);
       const viewport = pdfPage.getViewport({ scale });
       
       const dpr = window.devicePixelRatio || 1;
 
-      // Set canvas dimensions
       canvas.width = Math.max(1, Math.floor(viewport.width * dpr));
       canvas.height = Math.max(1, Math.floor(viewport.height * dpr));
       canvas.style.width = `${Math.floor(viewport.width)}px`;
@@ -345,29 +340,23 @@ export default function Teacher({ onFullscreenChange }) {
 
       const ctx = canvas.getContext("2d");
       
-      // Clear and set transform
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-      // Check again before rendering
       if (myRenderId !== renderIdRef.current) return;
 
-      // Start the render and save the task
       const renderTask = pdfPage.render({ canvasContext: ctx, viewport });
       taskRef.current = renderTask;
 
-      // Wait for render to complete
       await renderTask.promise;
       
-      // Clear the task reference on success
       if (taskRef.current === renderTask) {
         taskRef.current = null;
       }
       
       if (myRenderId !== renderIdRef.current) return;
     } catch (err) {
-      // Ignore cancellation errors
       if (err.name === 'RenderingCancelledException') {
         console.log("Render cancelled (expected)");
         return;
@@ -382,7 +371,7 @@ export default function Teacher({ onFullscreenChange }) {
   };
 
   useEffect(() => {
-    if (!pdfDoc || isFullscreen) return; // Don't render normal canvas when fullscreen is open
+    if (!pdfDoc || isFullscreen) return;
     renderPageToCanvas(pdfDoc, page, false);
   }, [pdfDoc, page, isFullscreen]);
 
@@ -408,10 +397,8 @@ export default function Teacher({ onFullscreenChange }) {
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => {
         if (isFullscreen) {
-          // Only render fullscreen canvas
           waitForStableBox(fsViewportRef.current, 10).then(() => renderPageToCanvas(pdfDoc, page, true));
         } else {
-          // Only render normal canvas
           renderPageToCanvas(pdfDoc, page, false);
         }
       });
@@ -467,7 +454,6 @@ export default function Teacher({ onFullscreenChange }) {
 
   useEffect(() => {
     return () => {
-      // Cancel any ongoing renders when unmounting
       if (renderTaskRef.current) {
         try {
           renderTaskRef.current.cancel();
@@ -610,7 +596,7 @@ export default function Teacher({ onFullscreenChange }) {
 
   const openFullscreen = async () => {
     setIsFullscreen(true);
-    onFullscreenChange?.(true); // Notify parent to hide header
+    onFullscreenChange?.(true);
     requestAnimationFrame(async () => {
       await waitForStableBox(fsViewportRef.current);
       if (pdfDoc) renderPageToCanvas(pdfDoc, page, true);
@@ -618,7 +604,6 @@ export default function Teacher({ onFullscreenChange }) {
   };
 
   const closeFullscreen = () => {
-    // Cancel fullscreen render task
     if (fsRenderTaskRef.current) {
       try {
         fsRenderTaskRef.current.cancel();
@@ -626,7 +611,7 @@ export default function Teacher({ onFullscreenChange }) {
       fsRenderTaskRef.current = null;
     }
     setIsFullscreen(false);
-    onFullscreenChange?.(false); // Notify parent to show header
+    onFullscreenChange?.(false);
   };
 
   const layoutStyle = isNarrow ? styles.layoutNarrow : styles.layoutWide;
@@ -860,32 +845,32 @@ export default function Teacher({ onFullscreenChange }) {
               <div style={styles.fsCanvasWrap}>
                 <canvas ref={fsCanvasRef} />
               </div>
-
-              <div style={styles.fsControls}>
-                <button
-                  type="button"
-                  onClick={prev}
-                  disabled={!canPrev}
-                  style={{ ...styles.fsNavBtn, opacity: canPrev ? 1 : 0.4 }}
-                >
-                  ← Prev
-                </button>
-                <div style={styles.fsCounter}>
-                  Slide {page} / {numPages}
-                </div>
-                <button
-                  type="button"
-                  onClick={next}
-                  disabled={!canNext}
-                  style={{ ...styles.fsNavBtn, opacity: canNext ? 1 : 0.4 }}
-                >
-                  Next →
-                </button>
-              </div>
-
-              {(rendering || loadingPdf) && <div style={styles.fsStatus}>Rendering…</div>}
-              {!!pdfErr && <div style={styles.fsError}>{pdfErr}</div>}
             </div>
+
+            <div style={styles.fsControls}>
+              <button
+                type="button"
+                onClick={prev}
+                disabled={!canPrev}
+                style={{ ...styles.fsNavBtn, opacity: canPrev ? 1 : 0.4 }}
+              >
+                ←
+              </button>
+              <div style={styles.fsCounter}>
+                {page}/{numPages}
+              </div>
+              <button
+                type="button"
+                onClick={next}
+                disabled={!canNext}
+                style={{ ...styles.fsNavBtn, opacity: canNext ? 1 : 0.4 }}
+              >
+                →
+              </button>
+            </div>
+
+            {(rendering || loadingPdf) && <div style={styles.fsStatus}>Rendering…</div>}
+            {!!pdfErr && <div style={styles.fsError}>{pdfErr}</div>}
           </div>
         </div>
       )}
@@ -895,13 +880,13 @@ export default function Teacher({ onFullscreenChange }) {
 
 const styles = {
   page: {
-  minHeight: "100vh",
-  paddingTop: "var(--header-h)",
-  boxSizing: "border-box",
-  backgroundColor: COLORS.pageBg,
-  overflowX: "hidden",
-  transition: "opacity 320ms ease, transform 420ms ease",
-},
+    minHeight: "100vh",
+    paddingTop: "var(--header-h)",
+    boxSizing: "border-box",
+    backgroundColor: COLORS.pageBg,
+    overflowX: "hidden",
+    transition: "opacity 320ms ease, transform 420ms ease",
+  },
   shell: {
     maxWidth: "1440px",
     margin: "0 auto",
@@ -1360,146 +1345,138 @@ const styles = {
     width: "fit-content",
   },
   fsOverlay: {
-  position: "fixed",
-  inset: 0,
-  backgroundColor: "rgba(5, 6, 7, 0.96)",
-  zIndex: 999,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  padding: 0,
-},
-
-fsCard: {
-  width: "100vw",
-  height: "100vh",
-  position: "relative",
-  display: "flex",
-  flexDirection: "column",
-  alignItems: "stretch",
-  justifyContent: "space-between",
-},
-
-fsCloseBtn: {
-  position: "absolute",
-  top: "clamp(8px, 1.2vw, 14px)",
-  right: "clamp(8px, 1.2vw, 14px)",
-  zIndex: 1001,
-  border: "1px solid rgba(255,182,193,0.40)",
-  backgroundColor: "rgba(255,182,193,0.25)",
-  borderRadius: "12px",
-  padding: "clamp(6px, 1vw, 8px) clamp(12px, 1.5vw, 16px)",
-  cursor: "pointer",
-  fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-  fontSize: "clamp(12px, 1.3vw, 14px)",
-  fontWeight: 700,
-  letterSpacing: "0.02em",
-  color: "rgba(255,105,130,0.95)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  boxShadow: "0 4px 12px rgba(255,105,130,0.15)",
-  backdropFilter: "blur(10px)",
-  WebkitBackdropFilter: "blur(10px)",
-  transition: "all 0.2s ease",
-},
-
-fsViewport: {
-  position: "relative",
-  width: "100%",
-  flex: "1 1 0",
-  minHeight: 0,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  overflow: "hidden",
-  paddingTop: "clamp(50px, 8vh, 60px)",
-  paddingBottom: "clamp(70px, 12vh, 90px)",
-},
-
-fsCanvasWrap: {
-  width: "100%",
-  height: "100%",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  padding: "clamp(8px, 1.2vw, 16px)",
-  boxSizing: "border-box",
-},
-
-fsControls: {
-  position: "absolute",
-  left: "clamp(8px, 1.5vw, 20px)",
-  right: "clamp(8px, 1.5vw, 20px)",
-  bottom: "clamp(8px, 1.5vw, 20px)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  gap: "clamp(6px, 1.5vw, 16px)",
-  pointerEvents: "none",
-  zIndex: 1000,
-},
-
-fsNavBtn: {
-  pointerEvents: "auto",
-  border: "1px solid rgba(44,177,166,0.40)",
-  backgroundColor: "rgba(255,255,255,0.92)",
-  borderRadius: "12px",
-  padding: "clamp(8px, 1.2vw, 12px) clamp(10px, 1.8vw, 16px)",
-  cursor: "pointer",
-  fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-  fontSize: "clamp(12px, 1.3vw, 15px)",
-  fontWeight: 900,
-  color: COLORS.teal,
-  backdropFilter: "blur(8px)",
-  WebkitBackdropFilter: "blur(8px)",
-  transition: "background-color 0.2s ease",
-  whiteSpace: "nowrap",
-},
-
-fsCounter: {
-  pointerEvents: "none",
-  backgroundColor: "rgba(44,177,166,0.82)",
-  border: "1px solid rgba(44,177,166,0.40)",
-  borderRadius: "999px",
-  padding: "clamp(8px, 1.2vw, 12px) clamp(12px, 2vw, 18px)",
-  fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-  fontSize: "clamp(11px, 1.3vw, 15px)",
-  fontWeight: 950,
-  color: "rgba(255,255,255,0.96)",
-  backdropFilter: "blur(8px)",
-  WebkitBackdropFilter: "blur(8px)",
-  whiteSpace: "nowrap",
-},
-
-fsStatus: {
-  position: "absolute",
-  top: "clamp(8px, 1.5vw, 20px)",
-  left: "50%",
-  transform: "translateX(-50%)",
-  backgroundColor: "rgba(0,0,0,0.74)",
-  color: COLORS.white,
-  padding: "6px 12px",
-  borderRadius: "999px",
-  fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-  fontSize: "clamp(10px, 1.1vw, 13px)",
-  fontWeight: 900,
-  zIndex: 1000,
-},
-
-fsError: {
-  position: "absolute",
-  left: "clamp(8px, 1.5vw, 20px)",
-  right: "clamp(8px, 1.5vw, 20px)",
-  top: "clamp(8px, 1.5vw, 20px)",
-  backgroundColor: "rgba(232,91,91,0.92)",
-  color: COLORS.white,
-  padding: "10px 14px",
-  borderRadius: "14px",
-  fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-  fontSize: "clamp(11px, 1.2vw, 14px)",
-  fontWeight: 850,
-  textAlign: "center",
-  zIndex: 1000,
-},
+    position: "fixed",
+    inset: 0,
+    backgroundColor: "rgba(5, 6, 7, 0.96)",
+    zIndex: 999,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 0,
+  },
+  fsCard: {
+    width: "100vw",
+    height: "100vh",
+    position: "relative",
+    display: "flex",
+    flexDirection: "column",
+  },
+  fsCloseBtn: {
+    position: "fixed",
+    top: "8px",
+    right: "8px",
+    zIndex: 1003,
+    border: "1px solid rgba(255,182,193,0.40)",
+    backgroundColor: "rgba(255,182,193,0.25)",
+    borderRadius: "12px",
+    padding: "8px 14px",
+    cursor: "pointer",
+    fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
+    fontSize: "13px",
+    fontWeight: 700,
+    letterSpacing: "0.02em",
+    color: "rgba(255,105,130,0.95)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    boxShadow: "0 4px 12px rgba(255,105,130,0.15)",
+    backdropFilter: "blur(10px)",
+    WebkitBackdropFilter: "blur(10px)",
+    transition: "all 0.2s ease",
+  },
+  fsViewport: {
+    position: "fixed",
+    top: 0,
+    left: 0,
+    width: "100vw",
+    height: "100vh",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+    zIndex: 999,
+  },
+  fsCanvasWrap: {
+    width: "100%",
+    height: "100%",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "8px",
+    boxSizing: "border-box",
+  },
+  fsControls: {
+    position: "fixed",
+    left: "50%",
+    transform: "translateX(-50%)",
+    bottom: "8px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: "8px",
+    pointerEvents: "none",
+    zIndex: 1002,
+  },
+  fsNavBtn: {
+    pointerEvents: "auto",
+    border: "1px solid rgba(44,177,166,0.40)",
+    backgroundColor: "rgba(255,255,255,0.92)",
+    borderRadius: "50%",
+    width: "44px",
+    height: "44px",
+    cursor: "pointer",
+    fontFamily: "Arial, sans-serif",
+    fontSize: "20px",
+    fontWeight: 900,
+    color: COLORS.teal,
+    backdropFilter: "blur(8px)",
+    WebkitBackdropFilter: "blur(8px)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 0,
+  },
+  fsCounter: {
+    pointerEvents: "none",
+    backgroundColor: "rgba(44,177,166,0.82)",
+    border: "1px solid rgba(44,177,166,0.40)",
+    borderRadius: "999px",
+    padding: "10px 16px",
+    fontFamily: "Inter, system-ui, -apple-system, sans-serif",
+    fontSize: "14px",
+    fontWeight: 950,
+    color: "rgba(255,255,255,0.96)",
+    backdropFilter: "blur(8px)",
+    WebkitBackdropFilter: "blur(8px)",
+    whiteSpace: "nowrap",
+  },
+  fsStatus: {
+    position: "fixed",
+    top: "8px",
+    left: "50%",
+    transform: "translateX(-50%)",
+    backgroundColor: "rgba(0,0,0,0.74)",
+    color: COLORS.white,
+    padding: "6px 12px",
+    borderRadius: "999px",
+    fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
+    fontSize: "11px",
+    fontWeight: 900,
+    zIndex: 1000,
+  },
+  fsError: {
+    position: "fixed",
+    left: "8px",
+    right: "8px",
+    top: "8px",
+    backgroundColor: "rgba(232,91,91,0.92)",
+    color: COLORS.white,
+    padding: "10px 14px",
+    borderRadius: "14px",
+    fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
+    fontSize: "12px",
+    fontWeight: 850,
+    textAlign: "center",
+    zIndex: 1000,
+  },
 };
