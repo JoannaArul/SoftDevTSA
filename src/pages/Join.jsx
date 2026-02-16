@@ -386,7 +386,7 @@ export default function Join({ onFullscreenChange }) {
     ...styles.page,
     opacity: mounted ? 1 : 0,
     transform: mounted ? "translateY(0px)" : "translateY(10px)",
-    overflowY: isFullscreen ? "hidden" : isNarrow ? "auto" : "hidden",
+    overflowY: isFullscreen ? "hidden" : "auto",
     WebkitOverflowScrolling: "touch",
   };
 
@@ -405,6 +405,10 @@ export default function Join({ onFullscreenChange }) {
   const rightRailStyle = isNarrow
     ? { ...styles.rightRail, height: "auto", overflow: "visible" }
     : { ...styles.rightRail, height: "100%", overflow: "hidden", minHeight: 0 };
+
+  const transcriptAreaStyle = isNarrow
+    ? { ...styles.transcriptArea, minHeight: "clamp(280px, 48vh, 520px)" }
+    : styles.transcriptArea;
 
   if (!joined) {
     return (
@@ -492,7 +496,7 @@ export default function Join({ onFullscreenChange }) {
           </section>
 
           <aside style={{ ...rightRailStyle, gap }} aria-label="Live transcript">
-            <section style={styles.transcriptArea} aria-label="Transcript">
+            <section style={transcriptAreaStyle} aria-label="Transcript">
               <div style={styles.transcriptHeader}>
                 <div style={styles.transcriptTitle}>Live Captions</div>
                 <div style={styles.transcriptBadge}>{joined ? "Connected" : "Not connected"}</div>
