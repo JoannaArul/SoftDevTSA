@@ -69,17 +69,17 @@ export default function Home() {
     () => [
       {
         title: "Upload PDF",
-        desc: "Upload your slideshow as a PDF so every student sees the exact same content you are presenting in real time. This ensures formatting stays consistent across all devices and screen sizes. Students can follow along without worrying about missing slides. It creates a reliable foundation for clear and organized instruction.",
+        desc: "Upload your slideshow as a PDF so everyone sees the exact same content you are presenting in real time. Formatting stays consistent across devices and screen sizes. Viewers can follow along without missing a slide. It makes presentations clear and organized anywhere.",
         variant: "light",
       },
       {
         title: "Start Session",
-        desc: "Create a live session in seconds and receive a unique join code to share with your class. Students can enter instantly without needing an account or complicated setup. Once inside, they are automatically synced to your presentation. This makes starting class fast, simple, and stress free.",
+        desc: "Create a live session in seconds and get a unique join code to share with your audience. People can enter instantly without accounts or setup. Once inside, they stay synced to your slides automatically. Starting is fast, simple, and reliable.",
         variant: "teal",
       },
       {
         title: "Speak",
-        desc: "Begin teaching naturally while live captions appear for students. A real time transcript updates continuously as you speak and as students join. This supports accessibility and helps students stay focused even if they miss a moment. Everyone can learn at their own pace with written and spoken content working together.",
+        desc: "Present naturally while live captions appear for everyone. A real time transcript updates continuously as you speak and as people join. This supports accessibility and helps listeners stay engaged even if they miss a moment. Spoken and written content work together in one place.",
         variant: "light",
       },
     ],
@@ -94,7 +94,7 @@ export default function Home() {
   useEffect(() => {
     const id = window.setInterval(() => {
       setActive((v) => (v + 1) % slides.length);
-    }, 3200);
+    }, 5000);
     return () => window.clearInterval(id);
   }, [slides.length]);
 
@@ -169,11 +169,10 @@ export default function Home() {
             </div>
 
             <div style={styles.rightCol}>
-              <h1 style={styles.heroTitle}>Make every lesson accessible.</h1>
+              <h1 style={styles.heroTitle}>Make every presentation accessible.</h1>
 
               <p style={styles.heroDesc}>
-                Teachers upload a PDF, start a session, and speak naturally. Students join with a code to view slides and
-                real-time transcription in one place.
+                Voxia works in school, at work, and at home. Upload your slides, start a session, and speak naturally while everyone follows along with synced slides and live captions.
               </p>
 
               <div style={styles.heroActions}>
@@ -189,7 +188,7 @@ export default function Home() {
                       btnHover === "teacher" ? "0 16px 30px rgba(0,0,0,0.34)" : "0 10px 20px rgba(0,0,0,0.26)",
                   }}
                 >
-                  Start Slideshow
+                  Start Session
                 </button>
 
                 <button

@@ -7,6 +7,7 @@ import Teacher from "./pages/Teacher";
 import Join from "./pages/Join";
 import Professional from "./pages/Professional";
 import FamilyAndFriends from "./pages/FamilyAndFriends";
+import Student from "./pages/Student";
 
 export default function App() {
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -20,9 +21,9 @@ export default function App() {
 
         <Route path="/teacher" element={<Teacher onFullscreenChange={setIsFullscreen} />} />
         <Route path="/join" element={<Join onFullscreenChange={setIsFullscreen} />} />
-
-        <Route path="/professional" element={<Professional />} />
-        <Route path="/family-and-friends" element={<FamilyAndFriends />} />
+        <Route path="/professional" element={<Professional onFullscreenChange={setIsFullscreen} />} />
+        <Route path="/family-and-friends" element={<FamilyAndFriends onFullscreenChange={setIsFullscreen} />} />
+        <Route path="/student" element={<Student onFullscreenChange={setIsFullscreen} />} />
 
         <Route
           path="/our-mission"

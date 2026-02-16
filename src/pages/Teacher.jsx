@@ -145,7 +145,7 @@ export default function Teacher({ onFullscreenChange }) {
     if (transcriptText) return transcriptText;
     if (captionStatus) return captionStatus;
     if (wsErr && !pdfDoc) return "Ready. Upload slides to begin.";
-    return pdfDoc ? "Turn on your mic to start live captions." : "Upload slides to start. Live captions and transcript will appear here.";
+    return pdfDoc ? "Turn on your mic to start live captions." : "Upload your slides to begin your lesson. Voxia helps students follow along with synchronized slides and real-time captions in the classroom or online.";
   }, [pdfDoc, transcriptText, captionStatus, wsErr]);
 
   const connectRoom = (code) => {
