@@ -12,7 +12,7 @@ const COLORS = {
 
 const NAV_LINKS = [
   { to: "/", label: "Home" },
-  { to: "/why-us", label: "Why us?"},
+  // { to: "/why-us", label: "Why us?"},
   { to: "/host", label: "Host" },
   { to: "/join", label: "Join" },
 ];
