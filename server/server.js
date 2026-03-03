@@ -48,9 +48,9 @@ function getRoom(code) {
       pdfName: "",
       numPages: 0,
       page: 1,
-      transcript: "",
-      // When true, student close events are from an intentional session end
-      // and should NOT trigger student_left / broadcastPresence back to teacher
+      // transcript is now an array of { speakerId, speakerName, role, text, ts }
+      transcriptSegments: [],
+      studentMicEnabled: false,
       ending: false,
     });
   }
@@ -86,25 +86,54 @@ function broadcastToStudents(code, msgObj) {
   }
 }
 
+function broadcastToAll(code, msgObj) {
+  const room = getRoom(code);
+  const payload = JSON.stringify(msgObj);
+  // Send to teacher
+  if (room.teacher && room.teacher.readyState === 1) {
+    try { room.teacher.send(payload); } catch (_) {}
+  }
+  // Send to all students
+  for (const student of room.students.values()) {
+    if (student.ws.readyState === 1) {
+      try { student.ws.send(payload); } catch (_) {}
+    }
+  }
+}
+
 function endRoomSession(code) {
   const room = getRoom(code);
+  room.ending = true;
 
   const snapshot = Array.from(room.students.values());
-  room.students.clear();
 
-  // Just close each socket. This fires ws.onclose on the student side
-  // which runs the exact same code as clicking the Leave button.
+  for (const student of snapshot) {
+    try {
+      if (student.ws.readyState === 1) {
+        student.ws.send(JSON.stringify({ type: "ended" }));
+      }
+    } catch (_) {}
+  }
+
   for (const student of snapshot) {
     try { student.ws.close(); } catch (_) {}
   }
 
+  room.students.clear();
   room.pdfUrl = "";
   room.pdfName = "";
   room.numPages = 0;
   room.page = 1;
-  room.transcript = "";
+  room.transcriptSegments = [];
+  room.studentMicEnabled = false;
 
   sendToTeacher(room, { type: "session_ended" });
+  broadcastPresence(code);
+
+  setTimeout(() => {
+    const r = rooms.get(code);
+    if (r) r.ending = false;
+  }, 0);
 }
 
 app.post("/upload", upload.single("pdf"), (req, res) => {
@@ -163,8 +192,24 @@ wss.on("connection", (ws, req) => {
         return;
       }
       if (msg.type === "transcript") {
-        room.transcript = String(msg.text || "");
-        broadcastToStudents(code, { type: "transcript", text: room.transcript });
+        // Teacher transcript — store as a segment and broadcast to all
+        const text = String(msg.text || "");
+        // Update or append teacher segment
+        const segments = room.transcriptSegments;
+        const lastSeg = segments[segments.length - 1];
+        if (lastSeg && lastSeg.role === "teacher") {
+          lastSeg.text = text;
+          lastSeg.ts = Date.now();
+        } else {
+          segments.push({ speakerId: "teacher", speakerName: "Teacher", role: "teacher", text, ts: Date.now() });
+        }
+        broadcastToAll(code, { type: "transcript_segments", segments: room.transcriptSegments });
+        return;
+      }
+      if (msg.type === "toggle_student_mic") {
+        room.studentMicEnabled = !!msg.enabled;
+        // Broadcast the new setting to all students
+        broadcastToStudents(code, { type: "student_mic_setting", enabled: room.studentMicEnabled });
         return;
       }
       if (msg.type === "kick") {
@@ -186,14 +231,43 @@ wss.on("connection", (ws, req) => {
         return;
       }
     }
+
+    if (role === "student") {
+      if (msg.type === "transcript") {
+        // Only accept student transcripts if studentMicEnabled
+        if (!room.studentMicEnabled) return;
+        const text = String(msg.text || "");
+        // Find this student
+        let studentEntry = null;
+        for (const [id, s] of room.students.entries()) {
+          if (s.ws === ws) { studentEntry = s; break; }
+        }
+        if (!studentEntry) return;
+        // Update or append this student's segment
+        const segments = room.transcriptSegments;
+        const lastSeg = segments[segments.length - 1];
+        if (lastSeg && lastSeg.role === "student" && lastSeg.speakerId === studentEntry.id) {
+          lastSeg.text = text;
+          lastSeg.ts = Date.now();
+        } else {
+          segments.push({
+            speakerId: studentEntry.id,
+            speakerName: studentEntry.name,
+            role: "student",
+            text,
+            ts: Date.now(),
+          });
+        }
+        broadcastToAll(code, { type: "transcript_segments", segments: room.transcriptSegments });
+        return;
+      }
+    }
   });
 
-  ws.on("close", (code_ws, reason) => {
+  ws.on("close", () => {
     if (role === "teacher") {
       if (room.teacher === ws) room.teacher = null;
     } else {
-      // If room.ending is true, the teacher intentionally ended the session.
-      // Don't fire student_left or broadcastPresence — room is already cleared.
       if (room.ending) return;
 
       let found = false;
@@ -207,6 +281,7 @@ wss.on("connection", (ws, req) => {
       }
       if (found) broadcastPresence(code);
     }
+
     if (!room.teacher && room.students.size === 0) rooms.delete(code);
   });
 
@@ -224,7 +299,9 @@ wss.on("connection", (ws, req) => {
       type: "sync",
       pdf: room.pdfUrl ? { url: room.pdfUrl, name: room.pdfName, numPages: room.numPages } : null,
       slide: { page: room.page || 1, numPages: room.numPages || 0 },
-      transcript: room.transcript || "",
+      transcript: "",
+      transcriptSegments: room.transcriptSegments || [],
+      studentMicEnabled: room.studentMicEnabled || false,
     }));
 
     sendToTeacher(room, { type: "student_joined", id, name });

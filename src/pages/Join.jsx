@@ -50,12 +50,96 @@ const waitForStableBox = (el, tries = 18) =>
     tick(tries);
   });
 
+// Deterministic color from string
+function hslFromString(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const hue = Math.abs(hash) % 360;
+  return `hsl(${hue}, 58%, 44%)`;
+}
+
 function GearIcon({ size = 18, color = "rgba(0,0,0,0.70)" }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="3" />
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
     </svg>
+  );
+}
+
+// Labeled transcript segments display
+function TranscriptSegments({ segments, fontSize, contrastMode, hcFontStack }) {
+  const bodyRef = useRef(null);
+
+  useEffect(() => {
+    if (bodyRef.current) {
+      bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
+    }
+  }, [segments]);
+
+  if (!segments || segments.length === 0) return null;
+
+  return (
+    <div ref={bodyRef} style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+      {segments.map((seg, i) => {
+        const isTeacherSeg = seg.role === "teacher";
+        const initials = (seg.speakerName || "?")[0].toUpperCase();
+        const avatarBg = isTeacherSeg
+          ? COLORS.teal
+          : hslFromString(seg.speakerId || seg.speakerName || "x");
+
+        return (
+          <div key={`${seg.speakerId}-${seg.ts}-${i}`} style={{ display: "flex", gap: "8px", alignItems: "flex-start" }}>
+            <div style={{
+              flexShrink: 0,
+              width: "28px",
+              height: "28px",
+              borderRadius: "50%",
+              backgroundColor: avatarBg,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontFamily: "Merriweather, serif",
+              fontSize: "11px",
+              fontWeight: 900,
+              color: "#fff",
+              marginTop: "2px",
+            }}>
+              {initials}
+            </div>
+            <div style={{ flex: "1 1 0", minWidth: 0 }}>
+              <div style={{
+                fontFamily: contrastMode ? hcFontStack : "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
+                fontSize: "11px",
+                fontWeight: 800,
+                color: isTeacherSeg
+                  ? COLORS.teal
+                  : contrastMode ? HC.text3 : "rgba(0,0,0,0.52)",
+                letterSpacing: "0.03em",
+                textTransform: "uppercase",
+                marginBottom: "2px",
+              }}>
+                {seg.speakerName}
+              </div>
+              <div style={{
+                fontFamily: contrastMode ? hcFontStack : "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
+                fontSize: `${fontSize}px`,
+                color: contrastMode ? HC.text : "rgba(0,0,0,0.76)",
+                lineHeight: 1.65,
+                fontWeight: contrastMode ? 700 : 600,
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+                letterSpacing: contrastMode ? "0.01em" : undefined,
+              }}>
+                {seg.text}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -68,6 +152,10 @@ export default function Join({ onFullscreenChange }) {
   const renderTaskRef = useRef(null);
   const fsRenderTaskRef = useRef(null);
   const wsRef = useRef(null);
+  const recognitionRef = useRef(null);
+  const isStoppingRef = useRef(false);
+  const lastTxRef = useRef(0);
+  const myStudentNameRef = useRef("Student");
 
   const [mounted, setMounted] = useState(false);
   const [isNarrow, setIsNarrow] = useState(false);
@@ -85,7 +173,9 @@ export default function Join({ onFullscreenChange }) {
   const [numPages, setNumPages] = useState(0);
   const [page, setPage] = useState(1);
 
-  const [transcriptText, setTranscriptText] = useState("");
+  // Labeled transcript segments
+  const [transcriptSegments, setTranscriptSegments] = useState([]);
+
   const [status, setStatus] = useState("Enter a join code to connect.");
   const [rendering, setRendering] = useState(false);
   const [err, setErr] = useState("");
@@ -95,6 +185,11 @@ export default function Join({ onFullscreenChange }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [fontSize, setFontSize] = useState(15);
   const [contrastMode, setContrastMode] = useState(false);
+
+  // Student mic state (controlled by teacher permission)
+  const [studentMicEnabled, setStudentMicEnabled] = useState(false);
+  const [micOn, setMicOn] = useState(false);
+  const [captionStatus, setCaptionStatus] = useState("");
 
   useEffect(() => {
     const t = requestAnimationFrame(() => setMounted(true));
@@ -143,10 +238,19 @@ export default function Join({ onFullscreenChange }) {
     return () => {
       try { renderTaskRef.current?.cancel(); } catch {}
       try { fsRenderTaskRef.current?.cancel(); } catch {}
+      stopCaptions();
       try { wsRef.current?.close(); } catch {}
       wsRef.current = null;
     };
   }, []);
+
+  // When studentMicEnabled is turned off by teacher, stop mic if running
+  useEffect(() => {
+    if (!studentMicEnabled && micOn) {
+      setMicOn(false);
+      stopCaptions();
+    }
+  }, [studentMicEnabled]);
 
   const resetSessionState = () => {
     setPdfUrl("");
@@ -154,9 +258,12 @@ export default function Join({ onFullscreenChange }) {
     setPdfDoc(null);
     setNumPages(0);
     setPage(1);
-    setTranscriptText("");
+    setTranscriptSegments([]);
     setErr("");
     setIsFullscreen(false);
+    setStudentMicEnabled(false);
+    setMicOn(false);
+    stopCaptions();
   };
 
   const leave = () => {
@@ -181,6 +288,7 @@ export default function Join({ onFullscreenChange }) {
     setJoined(false);
 
     const name = studentName.trim() || "Student";
+    myStudentNameRef.current = name;
 
     const ws = new WebSocket(`${BACKEND_WS}/ws?code=${encodeURIComponent(c)}&role=student&name=${encodeURIComponent(name)}`);
     wsRef.current = ws;
@@ -194,10 +302,7 @@ export default function Join({ onFullscreenChange }) {
       let msg;
       try { msg = JSON.parse(ev.data || "{}"); } catch { return; }
 
-      // Teacher ended the session — same as student clicking Leave,
-      // but we set kicked=true so the join screen shows the right message.
       if (msg.type === "ended") {
-        console.log('[JOIN] received ended message from server');
         wsRef.current = null;
         setJoined(false);
         setKicked(true);
@@ -207,7 +312,6 @@ export default function Join({ onFullscreenChange }) {
         return;
       }
 
-      // Teacher kicked this specific student
       if (msg.type === "kicked") {
         wsRef.current = null;
         setJoined(false);
@@ -225,7 +329,8 @@ export default function Join({ onFullscreenChange }) {
         }
         if (msg.slide?.page) setPage(Number(msg.slide.page) || 1);
         if (msg.slide?.numPages) setNumPages(Number(msg.slide.numPages) || 0);
-        if (typeof msg.transcript === "string") setTranscriptText(msg.transcript);
+        if (Array.isArray(msg.transcriptSegments)) setTranscriptSegments(msg.transcriptSegments);
+        if (typeof msg.studentMicEnabled === "boolean") setStudentMicEnabled(msg.studentMicEnabled);
         return;
       }
 
@@ -243,18 +348,22 @@ export default function Join({ onFullscreenChange }) {
         return;
       }
 
-      if (msg.type === "transcript") {
-        if (typeof msg.text === "string") setTranscriptText(msg.text);
+      // Labeled transcript segments from server
+      if (msg.type === "transcript_segments") {
+        if (Array.isArray(msg.segments)) setTranscriptSegments(msg.segments);
+        return;
+      }
+
+      // Student mic permission toggled by teacher
+      if (msg.type === "student_mic_setting") {
+        setStudentMicEnabled(!!msg.enabled);
         return;
       }
     };
 
     ws.onclose = () => {
-      // If wsRef was already nulled out, we handled this in onmessage (ended/kicked)
-      // or in leave() — nothing to do.
       if (wsRef.current !== ws) return;
       wsRef.current = null;
-      // Plain unexpected disconnect
       setJoined(false);
       resetSessionState();
       setStatus("Disconnected.");
@@ -400,12 +509,97 @@ export default function Join({ onFullscreenChange }) {
     onFullscreenChange?.(false);
   };
 
-  const transcript = useMemo(() => {
-    if (transcriptText) return transcriptText;
+  // Student mic / speech recognition
+  const stopCaptions = () => {
+    isStoppingRef.current = true;
+    setCaptionStatus("");
+    try { recognitionRef.current?.stop(); } catch {}
+    recognitionRef.current = null;
+    setTimeout(() => { isStoppingRef.current = false; }, 100);
+  };
+
+  const maybeBroadcastTranscript = (text) => {
+    const now = Date.now();
+    if (now - lastTxRef.current < 250) return;
+    lastTxRef.current = now;
+    if (wsRef.current && wsRef.current.readyState === 1) {
+      try { wsRef.current.send(JSON.stringify({ type: "transcript", text })); } catch {}
+    }
+  };
+
+  const startLocalCaptions = () => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setCaptionStatus("Not supported in this browser. Try Chrome/Edge.");
+      setMicOn(false);
+      return;
+    }
+    isStoppingRef.current = false;
+    setCaptionStatus("Listening…");
+    const rec = new SpeechRecognition();
+    recognitionRef.current = rec;
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.lang = "en-US";
+    let finalText = "";
+
+    rec.onstart = () => { if (!isStoppingRef.current) setCaptionStatus(""); };
+    rec.onresult = (event) => {
+      if (isStoppingRef.current) return;
+      setCaptionStatus("");
+      let interim = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const chunk = event.results[i][0].transcript;
+        if (event.results[i].isFinal) finalText += chunk + " ";
+        else interim += chunk;
+      }
+      const combined = (finalText + interim).trim();
+      maybeBroadcastTranscript(combined);
+    };
+    rec.onerror = (e) => {
+      if (isStoppingRef.current) return;
+      if (e.error === "no-speech" || e.error === "aborted") return;
+      setCaptionStatus(`Error: ${e.error || "unknown"}`);
+    };
+    rec.onend = () => {
+      if (isStoppingRef.current) return;
+      if (micOn && recognitionRef.current === rec) {
+        setTimeout(() => {
+          if (!isStoppingRef.current && micOn) {
+            try { rec.start(); } catch {
+              if (!isStoppingRef.current) setCaptionStatus("Paused. Tap mic to restart.");
+            }
+          }
+        }, 100);
+      }
+    };
+    try { rec.start(); } catch {
+      setCaptionStatus("Couldn't start mic. Allow microphone access and try again.");
+      setMicOn(false);
+    }
+  };
+
+  const toggleMic = () => {
+    if (!studentMicEnabled) return;
+    if (micOn) {
+      setMicOn(false);
+      stopCaptions();
+      return;
+    }
+    setCaptionStatus("");
+    setMicOn(true);
+    startLocalCaptions();
+  };
+
+  const showSegments = transcriptSegments.length > 0;
+
+  const placeholderText = useMemo(() => {
     if (!joined) return "Enter the join code shown by the host to connect.";
     if (!pdfDoc) return "Connected. Waiting for slides…";
     return "Connected. Waiting for captions…";
-  }, [transcriptText, joined, pdfDoc]);
+  }, [joined, pdfDoc]);
+
+  const hcFontStack = 'Atkinson Hyperlegible, "Lexend", Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
 
   const layoutStyle = isNarrow ? styles.layoutNarrow : styles.layoutWide;
   const shellPad = isShort ? "10px 12px" : "clamp(12px, 2.2vw, 20px) 16px";
@@ -439,8 +633,6 @@ export default function Join({ onFullscreenChange }) {
     ? { ...styles.transcriptArea, minHeight: "clamp(280px, 48vh, 520px)" }
     : styles.transcriptArea;
 
-  const hcFontStack = 'Atkinson Hyperlegible, "Lexend", Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
-
   if (!joined) {
     return (
       <main style={pageStyle}>
@@ -460,8 +652,10 @@ export default function Join({ onFullscreenChange }) {
               placeholder="Your name"
               style={{
                 ...styles.joinInput,
+                textTransform: "none",
                 letterSpacing: "0.01em",
                 fontSize: "16px",
+                fontWeight: 800,
                 ...(contrastMode ? { backgroundColor: "#0E151D", border: `1px solid ${HC.divider}`, color: HC.text, fontFamily: hcFontStack } : null),
               }}
               maxLength={40}
@@ -505,6 +699,7 @@ export default function Join({ onFullscreenChange }) {
     <main style={pageStyle}>
       <div style={shellStyle}>
         <div style={layoutCombined}>
+          {/* Slides */}
           <section style={slidesAreaStyle} aria-label="Slides">
             <div
               ref={viewportRef}
@@ -555,7 +750,9 @@ export default function Join({ onFullscreenChange }) {
             </div>
           </section>
 
-          <aside style={{ ...rightRailStyle, gap }} aria-label="Live transcript">
+          {/* Right Rail */}
+          <aside style={{ ...rightRailStyle, gap }} aria-label="Live captions">
+            {/* Transcript Panel */}
             <section
               style={{
                 ...transcriptAreaStyle,
@@ -634,25 +831,101 @@ export default function Join({ onFullscreenChange }) {
               </div>
 
               <div style={{ ...styles.transcriptBody, backgroundColor: contrastMode ? HC.panelBg : undefined }}>
-                <div
-                  style={{
-                    ...styles.transcriptText,
-                    fontSize: `${fontSize + (contrastMode ? 1 : 0)}px`,
-                    color: contrastMode ? HC.text : "rgba(0,0,0,0.76)",
-                    fontFamily: contrastMode ? hcFontStack : styles.transcriptText.fontFamily,
-                    fontWeight: contrastMode ? 700 : styles.transcriptText.fontWeight,
-                    lineHeight: contrastMode ? 1.85 : styles.transcriptText.lineHeight,
-                    letterSpacing: contrastMode ? "0.01em" : undefined,
-                  }}
-                >
-                  {transcript}
-                </div>
+                {showSegments ? (
+                  <TranscriptSegments
+                    segments={transcriptSegments}
+                    fontSize={fontSize}
+                    contrastMode={contrastMode}
+                    hcFontStack={hcFontStack}
+                  />
+                ) : (
+                  <div
+                    style={{
+                      fontFamily: contrastMode ? hcFontStack : "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
+                      fontSize: `${fontSize + (contrastMode ? 1 : 0)}px`,
+                      color: contrastMode ? HC.text : "rgba(0,0,0,0.76)",
+                      fontWeight: contrastMode ? 700 : 600,
+                      lineHeight: contrastMode ? 1.85 : 1.7,
+                      letterSpacing: contrastMode ? "0.01em" : undefined,
+                      whiteSpace: "pre-wrap",
+                      fontStyle: "italic",
+                      transition: "font-size 150ms ease",
+                    }}
+                  >
+                    {placeholderText}
+                  </div>
+                )}
               </div>
             </section>
+
+            {/* Student Mic Dock — only shown when teacher has enabled student mics */}
+            {studentMicEnabled && (
+              <section
+                style={{
+                  ...styles.micDock,
+                  backgroundColor: contrastMode ? HC.panelBg : "rgba(255,255,255,0.92)",
+                  border: contrastMode ? `1px solid ${HC.divider}` : "1px solid rgba(0,0,0,0.08)",
+                }}
+                aria-label="Microphone"
+              >
+                <div style={styles.micDockInner}>
+                  <div style={styles.micDockLeft}>
+                    <div style={{ ...styles.micDockTitle, color: contrastMode ? HC.text : COLORS.black }}>
+                      Your Mic
+                    </div>
+                    <div style={{ ...styles.micDockSub, color: contrastMode ? HC.text3 : "rgba(0,0,0,0.52)" }}>
+                      {micOn
+                        ? captionStatus || "Speaking — others can hear you"
+                        : "Tap to speak in the session"}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={toggleMic}
+                    style={{
+                      ...styles.micToggleBtn,
+                      backgroundColor: micOn
+                        ? "rgba(44,177,166,0.14)"
+                        : contrastMode ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)",
+                      border: micOn
+                        ? "1px solid rgba(44,177,166,0.40)"
+                        : contrastMode ? `1px solid ${HC.divider}` : "1px solid rgba(0,0,0,0.12)",
+                    }}
+                    aria-pressed={micOn}
+                    aria-label={micOn ? "Turn off microphone" : "Turn on microphone"}
+                  >
+                    <span style={styles.micToggleIcon}>{micOn ? "🎙️" : "🔇"}</span>
+                    <span style={{
+                      ...styles.micToggleLabel,
+                      color: micOn ? COLORS.teal : contrastMode ? HC.text3 : "rgba(0,0,0,0.58)",
+                    }}>
+                      {micOn ? "On" : "Off"}
+                    </span>
+                  </button>
+                </div>
+
+                {/* Animated mic-active indicator */}
+                {micOn && (
+                  <div style={styles.micActiveBar}>
+                    {[...Array(5)].map((_, i) => (
+                      <div
+                        key={i}
+                        style={{
+                          ...styles.micBar,
+                          animationDelay: `${i * 0.1}s`,
+                          backgroundColor: COLORS.teal,
+                        }}
+                      />
+                    ))}
+                  </div>
+                )}
+              </section>
+            )}
           </aside>
         </div>
       </div>
 
+      {/* Fullscreen */}
       {isFullscreen && (
         <div role="dialog" aria-modal="true" style={styles.fsOverlay}>
           <div style={styles.fsCard}>
@@ -674,6 +947,17 @@ export default function Join({ onFullscreenChange }) {
           </div>
         </div>
       )}
+
+      {/* Mic animation keyframes injected once */}
+      <style>{`
+        @keyframes micPulse {
+          0%, 100% { transform: scaleY(0.3); opacity: 0.5; }
+          50% { transform: scaleY(1); opacity: 1; }
+        }
+        [data-mic-bar] {
+          animation: micPulse 0.8s ease-in-out infinite;
+        }
+      `}</style>
     </main>
   );
 }
@@ -713,7 +997,6 @@ const styles = {
   transcriptHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px", padding: "12px 14px", borderBottom: "1px solid rgba(0,0,0,0.08)", backgroundColor: "rgba(255,255,255,0.55)", flexWrap: "wrap", flexShrink: 0 },
   transcriptTitle: { fontFamily: "Merriweather, serif", fontSize: "clamp(16px, 1.7vw, 18px)", fontWeight: 900, letterSpacing: "-0.02em" },
   transcriptBody: { flex: "1 1 0", minHeight: 0, padding: "14px", overflow: "auto" },
-  transcriptText: { fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif", lineHeight: 1.7, fontWeight: 600, whiteSpace: "pre-wrap", transition: "font-size 150ms ease" },
   gearBtn: { display: "flex", alignItems: "center", justifyContent: "center", width: "34px", height: "34px", borderRadius: "10px", cursor: "pointer", padding: 0, transition: "background-color 140ms ease, border-color 140ms ease" },
   settingsPopup: { position: "absolute", top: "calc(100% + 8px)", right: 0, zIndex: 200, width: "clamp(220px, 30vw, 260px)", borderRadius: "18px", backgroundColor: "rgba(255,255,255,0.97)", border: "1px solid rgba(0,0,0,0.10)", boxShadow: "0 20px 54px rgba(0,0,0,0.20)", padding: "14px", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", display: "grid", gap: "14px" },
   settingsTitle: { fontFamily: "Merriweather, serif", fontSize: "14px", fontWeight: 900, color: "rgba(0,0,0,0.84)", letterSpacing: "-0.01em" },
@@ -722,9 +1005,21 @@ const styles = {
   settingsValue: { fontWeight: 700, color: COLORS.teal, textTransform: "none", letterSpacing: 0, fontSize: "12px" },
   sliderTrackWrap: { display: "grid", gap: "4px" },
   slider: { width: "100%", accentColor: COLORS.teal, cursor: "pointer", height: "4px" },
-  sliderLabels: { disnplay: "flex", justifyContent: "space-between", fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif", fontSize: "11px", fontWeight: 700, color: "rgba(0,0,0,0.46)", paddingTop: "2px" },
+  sliderLabels: { display: "flex", justifyContent: "space-between", fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif", fontSize: "11px", fontWeight: 700, color: "rgba(0,0,0,0.46)", paddingTop: "2px" },
   toggleTrack: { position: "relative", width: "44px", height: "24px", borderRadius: "999px", border: "none", cursor: "pointer", padding: 0, transition: "background-color 200ms ease", flexShrink: 0 },
   toggleThumb: { position: "absolute", top: "3px", width: "18px", height: "18px", borderRadius: "50%", backgroundColor: COLORS.white, boxShadow: "0 1px 4px rgba(0,0,0,0.28)", transition: "transform 200ms ease", display: "block" },
+  // Mic dock
+  micDock: { width: "100%", flexShrink: 0, borderRadius: "18px", boxShadow: "0 4px 8px rgba(0,0,0,0.06)", padding: "12px 14px", boxSizing: "border-box", display: "flex", flexDirection: "column", gap: "10px" },
+  micDockInner: { display: "flex", alignItems: "center", gap: "12px" },
+  micDockLeft: { flex: "1 1 0", display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 },
+  micDockTitle: { fontFamily: "Merriweather, serif", fontSize: "clamp(13px, 1.4vw, 15px)", fontWeight: 900, letterSpacing: "-0.01em", lineHeight: 1.1 },
+  micDockSub: { fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif", fontSize: "clamp(11px, 1.1vw, 12px)", fontWeight: 650, lineHeight: 1.4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  micToggleBtn: { flexShrink: 0, borderRadius: "14px", padding: "10px 14px", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "3px", transition: "background-color 150ms ease, border-color 150ms ease", minWidth: "60px" },
+  micToggleIcon: { fontSize: "clamp(20px, 2.6vw, 26px)", lineHeight: 1 },
+  micToggleLabel: { fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif", fontSize: "clamp(9px, 1vw, 11px)", fontWeight: 900, letterSpacing: "0.03em", textTransform: "uppercase", lineHeight: 1.2 },
+  micActiveBar: { display: "flex", alignItems: "center", justifyContent: "center", gap: "3px", height: "20px" },
+  micBar: { width: "3px", borderRadius: "2px", height: "100%", animationName: "micPulse", animationDuration: "0.8s", animationTimingFunction: "ease-in-out", animationIterationCount: "infinite" },
+  // Fullscreen
   fsOverlay: { position: "fixed", inset: 0, backgroundColor: "rgba(5,6,7,0.96)", zIndex: 20000, display: "flex", alignItems: "center", justifyContent: "center", padding: 0 },
   fsCard: { width: "100vw", height: "100vh", position: "relative", display: "flex", flexDirection: "column" },
   fsCloseBtn: { position: "fixed", top: "8px", right: "8px", zIndex: 20003, border: "1px solid rgba(255,182,193,0.40)", backgroundColor: "rgba(255,182,193,0.25)", borderRadius: "12px", padding: "8px 14px", cursor: "pointer", fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif", fontSize: "13px", fontWeight: 700, color: "rgba(255,105,130,0.95)", display: "flex", alignItems: "center", justifyContent: "center", backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)" },
