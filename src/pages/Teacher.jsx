@@ -1,5 +1,6 @@
 // Teacher.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import * as pdfjsLib from "pdfjs-dist";
 import pdfWorker from "pdfjs-dist/build/pdf.worker?url";
 import { BACKEND_HTTP, BACKEND_WS } from "../backend";
@@ -72,6 +73,8 @@ function GearIcon({ size = 18, color = "rgba(0,0,0,0.70)" }) {
 }
 
 export default function Teacher({ onFullscreenChange }) {
+  const navigate = useNavigate();
+
   const fileInputRef = useRef(null);
   const viewportRef = useRef(null);
   const canvasRef = useRef(null);
@@ -105,7 +108,11 @@ export default function Teacher({ onFullscreenChange }) {
   const [wsErr, setWsErr] = useState("");
 
   const [micOn, setMicOn] = useState(false);
-  const [transcriptText, setTranscriptText] = useState("");
+
+  // ✅ Transcript history that NEVER clears when mic toggles
+  const finalTranscriptRef = useRef("");
+  const [finalTranscript, setFinalTranscript] = useState("");
+  const [interimTranscript, setInterimTranscript] = useState("");
   const [captionStatus, setCaptionStatus] = useState("");
 
   const [joinCode] = useState(() => makeCode());
@@ -163,6 +170,33 @@ export default function Teacher({ onFullscreenChange }) {
     return () => document.removeEventListener("mousedown", onDown);
   }, [settingsOpen]);
 
+  const resetTranscript = () => {
+    finalTranscriptRef.current = "";
+    setFinalTranscript("");
+    setInterimTranscript("");
+    setCaptionStatus("");
+  };
+
+  const leaveTeacherRoom = () => {
+    try { wsRef.current?.close(); } catch {}
+    wsRef.current = null;
+
+    setParticipants([]);
+    setStudentCount(0);
+    setParticipantsOpen(false);
+
+    setPdfDoc(null);
+    setPdfUrl("");
+    setPdfName("");
+    setNumPages(0);
+    setPage(1);
+    setPdfErr("");
+    setWsErr("");
+
+    stopCaptions();
+    resetTranscript();
+  };
+
   useEffect(() => {
     if (!joinCode) return;
     let dead = false;
@@ -207,10 +241,17 @@ export default function Teacher({ onFullscreenChange }) {
           setParticipants((prev) => prev.filter((p) => p.id !== msg.id));
         }
 
+        // ✅ If the room is ended (by you or server), take teacher back to Host page
         if (msg.type === "session_ended") {
           setParticipants([]);
           setStudentCount(0);
           setParticipantsOpen(false);
+          try { wsRef.current?.close(); } catch {}
+          wsRef.current = null;
+          stopCaptions();
+          onFullscreenChange?.(false);
+          setIsFullscreen(false);
+          navigate("/host");
         }
       } catch {}
     };
@@ -226,17 +267,13 @@ export default function Teacher({ onFullscreenChange }) {
 
     return () => {
       dead = true;
-      // Only close if the socket actually opened — closing during CONNECTING causes an error
       if (ws.readyState === 1 || ws.readyState === 2) {
         try { ws.close(); } catch {}
       }
       if (wsRef.current === ws) wsRef.current = null;
     };
-  }, [joinCode]);
+  }, [joinCode, navigate, onFullscreenChange]);
 
-  // presence is the single source of truth for count
-  // student_joined/left only update the name list
-  // so we derive count from participants.length
   useEffect(() => {
     setStudentCount(participants.length);
   }, [participants]);
@@ -252,12 +289,18 @@ export default function Teacher({ onFullscreenChange }) {
     setParticipants((prev) => prev.filter((p) => p.id !== participantId));
   };
 
+  // ✅ End session + navigate teacher back to Host page
   const endSession = () => {
-    console.log('[TEACHER] endSession clicked, ws readyState:', wsRef.current?.readyState);
     wsSend(wsRef.current, { type: "end" });
+    stopCaptions();
+    try { wsRef.current?.close(); } catch {}
+    wsRef.current = null;
     setParticipants([]);
     setStudentCount(0);
     setParticipantsOpen(false);
+    onFullscreenChange?.(false);
+    setIsFullscreen(false);
+    navigate("/host");
   };
 
   const maybeBroadcastTranscript = (text) => {
@@ -268,12 +311,13 @@ export default function Teacher({ onFullscreenChange }) {
   };
 
   const transcript = useMemo(() => {
-    if (transcriptText) return transcriptText;
+    const combined = (finalTranscript + (interimTranscript ? (finalTranscript ? " " : "") + interimTranscript : "")).trim();
+    if (combined) return combined;
     if (captionStatus) return captionStatus;
     return pdfDoc
       ? "Turn on your mic to start live captions."
       : "Upload your slides to begin your lesson. Voxia helps students follow along with synchronized slides and real-time captions in the classroom or online.";
-  }, [pdfDoc, transcriptText, captionStatus]);
+  }, [pdfDoc, finalTranscript, interimTranscript, captionStatus]);
 
   const openPicker = () => fileInputRef.current?.click();
 
@@ -380,7 +424,7 @@ export default function Teacher({ onFullscreenChange }) {
       if (taskRef.current === renderTask) taskRef.current = null;
       if (myRenderId !== renderIdRef.current) return;
     } catch (err) {
-      if (err.name === "RenderingCancelledException") return;
+      if (err?.name === "RenderingCancelledException") return;
       if (myRenderId === renderIdRef.current) setPdfErr("Couldn't render this slide.");
     } finally {
       if (myRenderId === renderIdRef.current) setRendering(false);
@@ -427,7 +471,7 @@ export default function Teacher({ onFullscreenChange }) {
       stopCaptions();
       onFullscreenChange?.(false);
     };
-  }, []);
+  }, [onFullscreenChange]);
 
   const canPrev = pdfDoc && page > 1 && !rendering && !loadingPdf;
   const canNext = pdfDoc && page < numPages && !rendering && !loadingPdf;
@@ -445,6 +489,7 @@ export default function Teacher({ onFullscreenChange }) {
     mediaRecorderRef.current = null;
     try { mediaStreamRef.current?.getTracks()?.forEach((t) => t.stop()); } catch {}
     mediaStreamRef.current = null;
+    setInterimTranscript("");
     setTimeout(() => { isStoppingRef.current = false; }, 100);
   };
 
@@ -462,27 +507,41 @@ export default function Teacher({ onFullscreenChange }) {
     rec.continuous = true;
     rec.interimResults = true;
     rec.lang = "en-US";
-    let finalText = "";
 
     rec.onstart = () => { if (!isStoppingRef.current) setCaptionStatus(""); };
+
     rec.onresult = (event) => {
       if (isStoppingRef.current) return;
       setCaptionStatus("");
+
       let interim = "";
+      let finalAdded = false;
+
       for (let i = event.resultIndex; i < event.results.length; i++) {
-        const chunk = event.results[i][0].transcript;
-        if (event.results[i].isFinal) finalText += chunk + " ";
-        else interim += chunk;
+        const chunk = (event.results[i][0]?.transcript || "").trim();
+        if (!chunk) continue;
+
+        if (event.results[i].isFinal) {
+          finalTranscriptRef.current = (finalTranscriptRef.current + " " + chunk).trim();
+          finalAdded = true;
+        } else {
+          interim += (interim ? " " : "") + chunk;
+        }
       }
-      const combined = (finalText + interim).trim();
-      setTranscriptText(combined);
-      maybeBroadcastTranscript(combined);
+
+      if (finalAdded) setFinalTranscript(finalTranscriptRef.current);
+      setInterimTranscript(interim.trim());
+
+      const combined = (finalTranscriptRef.current + (interim ? " " + interim : "")).trim();
+      if (combined) maybeBroadcastTranscript(combined);
     };
+
     rec.onerror = (e) => {
       if (isStoppingRef.current) return;
       if (e.error === "no-speech" || e.error === "aborted") return;
       setCaptionStatus(`Captions error: ${e.error || "unknown"}`);
     };
+
     rec.onend = () => {
       if (isStoppingRef.current) return;
       if (micOn && recognitionRef.current === rec) {
@@ -495,12 +554,14 @@ export default function Teacher({ onFullscreenChange }) {
         }, 100);
       }
     };
+
     try { rec.start(); } catch {
       setCaptionStatus("Couldn't start captions. Refresh and allow microphone access.");
       setMicOn(false);
     }
   };
 
+  // ✅ No more clearing transcript history on mute/unmute
   const toggleMic = async () => {
     if (micOn) {
       setMicOn(false);
@@ -508,7 +569,6 @@ export default function Teacher({ onFullscreenChange }) {
       setCaptionStatus("Mic off");
       return;
     }
-    setTranscriptText("");
     setCaptionStatus("");
     setMicOn(true);
     startLocalCaptions();
@@ -752,7 +812,6 @@ export default function Teacher({ onFullscreenChange }) {
         </div>
       </div>
 
-      {/* Join Code Modal */}
       {joinModalOpen && (
         <div role="dialog" aria-modal="true" style={styles.modalOverlay} onMouseDown={(e) => { if (e.target === e.currentTarget) setJoinModalOpen(false); }}>
           <div style={styles.modalCard}>
@@ -764,7 +823,6 @@ export default function Teacher({ onFullscreenChange }) {
         </div>
       )}
 
-      {/* Participants Modal */}
       {participantsOpen && (
         <div role="dialog" aria-modal="true" style={styles.modalOverlay} onMouseDown={(e) => { if (e.target === e.currentTarget) setParticipantsOpen(false); }}>
           <div style={styles.modalCard}>
@@ -803,7 +861,6 @@ export default function Teacher({ onFullscreenChange }) {
         </div>
       )}
 
-      {/* Fullscreen */}
       {isFullscreen && (
         <div role="dialog" aria-modal="true" style={styles.fsOverlay}>
           <div style={styles.fsCard}>
