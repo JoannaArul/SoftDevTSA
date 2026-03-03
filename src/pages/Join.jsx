@@ -1,3 +1,4 @@
+// Join.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as pdfjsLib from "pdfjs-dist";
 import pdfWorker from "pdfjs-dist/build/pdf.worker?url";
@@ -13,6 +14,17 @@ const COLORS = {
   black: "#000000",
   white: "#FFFFFF",
   pageBg: "#EEF3EF",
+};
+
+const HC = {
+  pageBg: "#0B0F14",
+  panelBg: "#121A22",
+  headerBg: "#0F1620",
+  divider: "#2A3642",
+  text: "#FFFFFF",
+  text2: "#D7DEE7",
+  text3: "#AAB6C2",
+  teal: "#2CB1A6",
 };
 
 function cleanCode(v) {
@@ -38,6 +50,15 @@ const waitForStableBox = (el, tries = 18) =>
     tick(tries);
   });
 
+function GearIcon({ size = 18, color = "rgba(0,0,0,0.70)" }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
+  );
+}
+
 export default function Join({ onFullscreenChange }) {
   const viewportRef = useRef(null);
   const canvasRef = useRef(null);
@@ -53,7 +74,9 @@ export default function Join({ onFullscreenChange }) {
   const [isShort, setIsShort] = useState(false);
 
   const [code, setCode] = useState("");
+  const [studentName, setStudentName] = useState("");
   const [joined, setJoined] = useState(false);
+  const [kicked, setKicked] = useState(false);
 
   const [pdfUrl, setPdfUrl] = useState("");
   const [pdfName, setPdfName] = useState("");
@@ -69,6 +92,10 @@ export default function Join({ onFullscreenChange }) {
 
   const [isFullscreen, setIsFullscreen] = useState(false);
 
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [fontSize, setFontSize] = useState(15);
+  const [contrastMode, setContrastMode] = useState(false);
+
   useEffect(() => {
     const t = requestAnimationFrame(() => setMounted(true));
     return () => cancelAnimationFrame(t);
@@ -76,10 +103,8 @@ export default function Join({ onFullscreenChange }) {
 
   useEffect(() => {
     const calc = () => {
-      const h = window.innerHeight || 0;
-      const w = window.innerWidth || 0;
-      setIsShort(h < 760);
-      setIsNarrow(w < 1024);
+      setIsShort(window.innerHeight < 760);
+      setIsNarrow(window.innerWidth < 1024);
     };
     calc();
     window.addEventListener("resize", calc, { passive: true });
@@ -103,97 +128,141 @@ export default function Join({ onFullscreenChange }) {
     };
   }, [isFullscreen]);
 
-  const connect = (joinCode) => {
-    const c = cleanCode(joinCode);
-    if (!c) return;
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const onDown = (e) => {
+      if (!e.target.closest("[data-settings-modal]") && !e.target.closest("[data-settings-btn]")) {
+        setSettingsOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [settingsOpen]);
 
-    try {
-      wsRef.current?.close();
-    } catch {}
-    wsRef.current = null;
+  useEffect(() => {
+    return () => {
+      try { renderTaskRef.current?.cancel(); } catch {}
+      try { fsRenderTaskRef.current?.cancel(); } catch {}
+      try { wsRef.current?.close(); } catch {}
+      wsRef.current = null;
+    };
+  }, []);
 
-    setErr("");
-    setStatus("Connecting…");
-    setJoined(false);
-
-    try {
-      const ws = new WebSocket(`${BACKEND_WS}/ws?code=${encodeURIComponent(c)}&role=student`);
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        setJoined(true);
-        setStatus("Connected. Waiting for host…");
-      };
-
-      ws.onmessage = (ev) => {
-        let msg;
-        try {
-          msg = JSON.parse(ev.data || "{}");
-        } catch {
-          return;
-        }
-
-        if (msg.type === "sync") {
-          if (msg.pdf?.url) {
-            setPdfUrl(absolutizeUrl(msg.pdf.url));
-            setPdfName(msg.pdf.name || "");
-          }
-          if (msg.slide?.page) setPage(Number(msg.slide.page) || 1);
-          if (msg.slide?.numPages) setNumPages(Number(msg.slide.numPages) || 0);
-          if (typeof msg.transcript === "string") setTranscriptText(msg.transcript);
-          return;
-        }
-
-        if (msg.type === "pdf") {
-          if (msg.url) setPdfUrl(absolutizeUrl(msg.url));
-          if (msg.name) setPdfName(msg.name);
-          if (msg.numPages) setNumPages(Number(msg.numPages) || 0);
-          setStatus("Slides received.");
-          return;
-        }
-
-        if (msg.type === "slide") {
-          if (msg.page) setPage(Number(msg.page) || 1);
-          if (msg.numPages) setNumPages(Number(msg.numPages) || 0);
-          return;
-        }
-
-        if (msg.type === "transcript") {
-          if (typeof msg.text === "string") setTranscriptText(msg.text);
-          return;
-        }
-      };
-
-      ws.onclose = () => {
-        if (wsRef.current === ws) wsRef.current = null;
-        setStatus("Disconnected.");
-        setJoined(false);
-      };
-
-      ws.onerror = () => {
-        setErr("WebSocket error. Check your backend URL and that /ws is reachable.");
-      };
-    } catch {
-      setErr("Couldn't connect. Check backend and join code.");
-    }
-  };
-
-  const leave = () => {
-    try {
-      wsRef.current?.close();
-    } catch {}
-    wsRef.current = null;
-
-    setJoined(false);
+  const resetSessionState = () => {
     setPdfUrl("");
     setPdfName("");
     setPdfDoc(null);
     setNumPages(0);
     setPage(1);
     setTranscriptText("");
-    setStatus("Enter a join code to connect.");
     setErr("");
     setIsFullscreen(false);
+  };
+
+  const leave = () => {
+    try { wsRef.current?.close(); } catch {}
+    wsRef.current = null;
+    setJoined(false);
+    setKicked(false);
+    resetSessionState();
+    setStatus("Enter a join code to connect.");
+  };
+
+  const connect = (joinCode) => {
+    const c = cleanCode(joinCode);
+    if (!c) return;
+
+    try { wsRef.current?.close(); } catch {}
+    wsRef.current = null;
+
+    setErr("");
+    setKicked(false);
+    setStatus("Connecting…");
+    setJoined(false);
+
+    const name = studentName.trim() || "Student";
+
+    const ws = new WebSocket(`${BACKEND_WS}/ws?code=${encodeURIComponent(c)}&role=student&name=${encodeURIComponent(name)}`);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      setJoined(true);
+      setStatus("Connected. Waiting for host…");
+    };
+
+    ws.onmessage = (ev) => {
+      let msg;
+      try { msg = JSON.parse(ev.data || "{}"); } catch { return; }
+
+      // Teacher ended the session — same as student clicking Leave,
+      // but we set kicked=true so the join screen shows the right message.
+      if (msg.type === "ended") {
+        console.log('[JOIN] received ended message from server');
+        wsRef.current = null;
+        setJoined(false);
+        setKicked(true);
+        resetSessionState();
+        setStatus("The host ended the session.");
+        try { ws.close(); } catch {}
+        return;
+      }
+
+      // Teacher kicked this specific student
+      if (msg.type === "kicked") {
+        wsRef.current = null;
+        setJoined(false);
+        setKicked(true);
+        resetSessionState();
+        setStatus("You were removed from the session.");
+        try { ws.close(); } catch {}
+        return;
+      }
+
+      if (msg.type === "sync") {
+        if (msg.pdf?.url) {
+          setPdfUrl(absolutizeUrl(msg.pdf.url));
+          setPdfName(msg.pdf.name || "");
+        }
+        if (msg.slide?.page) setPage(Number(msg.slide.page) || 1);
+        if (msg.slide?.numPages) setNumPages(Number(msg.slide.numPages) || 0);
+        if (typeof msg.transcript === "string") setTranscriptText(msg.transcript);
+        return;
+      }
+
+      if (msg.type === "pdf") {
+        if (msg.url) setPdfUrl(absolutizeUrl(msg.url));
+        if (msg.name) setPdfName(msg.name);
+        if (msg.numPages) setNumPages(Number(msg.numPages) || 0);
+        setStatus("Slides received.");
+        return;
+      }
+
+      if (msg.type === "slide") {
+        if (msg.page) setPage(Number(msg.page) || 1);
+        if (msg.numPages) setNumPages(Number(msg.numPages) || 0);
+        return;
+      }
+
+      if (msg.type === "transcript") {
+        if (typeof msg.text === "string") setTranscriptText(msg.text);
+        return;
+      }
+    };
+
+    ws.onclose = () => {
+      // If wsRef was already nulled out, we handled this in onmessage (ended/kicked)
+      // or in leave() — nothing to do.
+      if (wsRef.current !== ws) return;
+      wsRef.current = null;
+      // Plain unexpected disconnect
+      setJoined(false);
+      resetSessionState();
+      setStatus("Disconnected.");
+    };
+
+    ws.onerror = () => {
+      setErr("Connection error. Check your join code and try again.");
+    };
   };
 
   const loadPdfFromUrl = async (url) => {
@@ -201,7 +270,6 @@ export default function Join({ onFullscreenChange }) {
     setErr("");
     setStatus("Loading slides…");
     setPdfDoc(null);
-
     try {
       const task = pdfjsLib.getDocument({ url, withCredentials: false });
       const doc = await task.promise;
@@ -210,7 +278,7 @@ export default function Join({ onFullscreenChange }) {
       setStatus("Slides loaded.");
       setPage((p) => Math.min(Math.max(1, p), doc.numPages));
     } catch {
-      setErr("Could not load slides. Make sure the host uploaded a PDF and the backend serves /files.");
+      setErr("Could not load slides.");
       setStatus("Waiting for host…");
     }
   };
@@ -229,16 +297,13 @@ export default function Join({ onFullscreenChange }) {
 
     const w = viewportEl.clientWidth;
     const h = viewportEl.clientHeight;
-
     if ((w < 120 || h < 120) && triesLeft > 0) {
       requestAnimationFrame(() => renderPageToCanvas(doc, pageNum, fullscreen, triesLeft - 1));
       return;
     }
 
     if (taskRef.current) {
-      try {
-        taskRef.current.cancel();
-      } catch {}
+      try { taskRef.current.cancel(); } catch {}
       taskRef.current = null;
     }
 
@@ -253,11 +318,9 @@ export default function Join({ onFullscreenChange }) {
       const padding = fullscreen ? 4 : 22;
       const maxW = Math.max(240, viewportEl.clientWidth - padding);
       const maxH = Math.max(240, viewportEl.clientHeight - padding);
-
       const v1 = pdfPage.getViewport({ scale: 1 });
       const scale = Math.min(maxW / v1.width, maxH / v1.height);
       const viewport = pdfPage.getViewport({ scale });
-
       const dpr = window.devicePixelRatio || 1;
 
       canvas.width = Math.max(1, Math.floor(viewport.width * dpr));
@@ -274,9 +337,7 @@ export default function Join({ onFullscreenChange }) {
 
       const renderTask = pdfPage.render({ canvasContext: ctx, viewport });
       taskRef.current = renderTask;
-
       await renderTask.promise;
-
       if (taskRef.current === renderTask) taskRef.current = null;
       if (myRenderId !== renderIdRef.current) return;
     } catch (e) {
@@ -295,16 +356,12 @@ export default function Join({ onFullscreenChange }) {
   useEffect(() => {
     if (!isFullscreen || !pdfDoc) return;
     let cancelled = false;
-
     const run = async () => {
       await waitForStableBox(fsViewportRef.current);
       if (!cancelled) renderPageToCanvas(pdfDoc, page, true);
     };
-
     run();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [isFullscreen, pdfDoc, page]);
 
   useEffect(() => {
@@ -327,32 +384,6 @@ export default function Join({ onFullscreenChange }) {
     };
   }, [pdfDoc, page, isFullscreen]);
 
-  useEffect(() => {
-    return () => {
-      if (renderTaskRef.current) {
-        try {
-          renderTaskRef.current.cancel();
-        } catch {}
-      }
-      if (fsRenderTaskRef.current) {
-        try {
-          fsRenderTaskRef.current.cancel();
-        } catch {}
-      }
-      try {
-        wsRef.current?.close();
-      } catch {}
-      wsRef.current = null;
-    };
-  }, []);
-
-  const transcript = useMemo(() => {
-    if (transcriptText) return transcriptText;
-    if (!joined) return "Enter the join code shown by the host to connect.";
-    if (!pdfDoc) return "Connected. Waiting for slides…";
-    return "Connected. Waiting for captions…";
-  }, [transcriptText, joined, pdfDoc]);
-
   const openFullscreen = async () => {
     setIsFullscreen(true);
     onFullscreenChange?.(true);
@@ -363,31 +394,29 @@ export default function Join({ onFullscreenChange }) {
   };
 
   const closeFullscreen = () => {
-    if (fsRenderTaskRef.current) {
-      try {
-        fsRenderTaskRef.current.cancel();
-      } catch {}
-      fsRenderTaskRef.current = null;
-    }
+    try { fsRenderTaskRef.current?.cancel(); } catch {}
+    fsRenderTaskRef.current = null;
     setIsFullscreen(false);
     onFullscreenChange?.(false);
   };
 
-  const handleKeyPress = (e) => {
-    if (e.key === "Enter") connect(code);
-  };
+  const transcript = useMemo(() => {
+    if (transcriptText) return transcriptText;
+    if (!joined) return "Enter the join code shown by the host to connect.";
+    if (!pdfDoc) return "Connected. Waiting for slides…";
+    return "Connected. Waiting for captions…";
+  }, [transcriptText, joined, pdfDoc]);
 
   const layoutStyle = isNarrow ? styles.layoutNarrow : styles.layoutWide;
-
   const shellPad = isShort ? "10px 12px" : "clamp(12px, 2.2vw, 20px) 16px";
   const gap = isShort ? "12px" : "14px";
 
   const pageStyle = {
     ...styles.page,
+    backgroundColor: contrastMode ? HC.pageBg : COLORS.pageBg,
     opacity: mounted ? 1 : 0,
     transform: mounted ? "translateY(0px)" : "translateY(10px)",
     overflowY: isFullscreen ? "hidden" : "auto",
-    WebkitOverflowScrolling: "touch",
   };
 
   const shellStyle = isNarrow
@@ -410,41 +439,64 @@ export default function Join({ onFullscreenChange }) {
     ? { ...styles.transcriptArea, minHeight: "clamp(280px, 48vh, 520px)" }
     : styles.transcriptArea;
 
+  const hcFontStack = 'Atkinson Hyperlegible, "Lexend", Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
+
   if (!joined) {
     return (
       <main style={pageStyle}>
         <div style={styles.centerFrame}>
-          <div style={styles.joinCard}>
-            <div style={styles.joinTitle}>Join Session</div>
-            <div style={styles.joinSub}>Enter the 6-character code from your host.</div>
+          <div style={{ ...styles.joinCard, ...(contrastMode ? { backgroundColor: HC.panelBg, border: `1px solid ${HC.divider}` } : null) }}>
+            <div style={{ ...styles.joinTitle, color: contrastMode ? HC.text : COLORS.black }}>
+              {kicked ? "Session Ended" : "Join Session"}
+            </div>
+            <div style={{ ...styles.joinSub, color: contrastMode ? HC.text2 : "rgba(0,0,0,0.66)" }}>
+              {kicked ? status : "Enter your name and the 6-character code from your host."}
+            </div>
+
+            <input
+              value={studentName}
+              onChange={(e) => setStudentName(e.target.value)}
+              onKeyPress={(e) => { if (e.key === "Enter") connect(code); }}
+              placeholder="Your name"
+              style={{
+                ...styles.joinInput,
+                letterSpacing: "0.01em",
+                fontSize: "16px",
+                ...(contrastMode ? { backgroundColor: "#0E151D", border: `1px solid ${HC.divider}`, color: HC.text, fontFamily: hcFontStack } : null),
+              }}
+              maxLength={40}
+            />
 
             <div style={styles.joinRow}>
               <input
                 value={code}
                 onChange={(e) => setCode(cleanCode(e.target.value))}
-                onKeyPress={handleKeyPress}
+                onKeyPress={(e) => { if (e.key === "Enter") connect(code); }}
                 placeholder="ABC123"
-                style={styles.joinInput}
+                style={{
+                  ...styles.joinInput,
+                  ...(contrastMode ? { backgroundColor: "#0E151D", border: `1px solid ${HC.divider}`, color: HC.text, fontFamily: hcFontStack } : null),
+                }}
                 maxLength={6}
               />
-              <button type="button" onClick={() => connect(code)} style={styles.joinBtn}>
+              <button
+                type="button"
+                onClick={() => { setKicked(false); connect(code); }}
+                style={{ ...styles.joinBtn, ...(contrastMode ? { background: `linear-gradient(135deg, ${HC.teal}, rgba(44,177,166,0.82))` } : null) }}
+              >
                 Join
               </button>
             </div>
 
-            <div style={styles.joinHint}>{err ? err : status}</div>
-          </div>
-        </div>
-
-        {isFullscreen && (
-          <div role="dialog" aria-modal="true" style={styles.fsOverlay}>
-            <div style={styles.fsCard}>
-              <button type="button" onClick={closeFullscreen} style={styles.fsCloseBtn} aria-label="Exit fullscreen">
-                Exit
-              </button>
+            <div style={{
+              ...styles.joinHint,
+              color: err ? "rgba(200,50,50,0.90)" : contrastMode ? HC.text3 : kicked ? "rgba(200,50,50,0.70)" : "rgba(0,0,0,0.62)",
+              fontFamily: contrastMode ? hcFontStack : styles.joinHint.fontFamily,
+            }}>
+              {err || (kicked ? "" : status)}
             </div>
           </div>
-        )}
+        </div>
       </main>
     );
   }
@@ -454,14 +506,20 @@ export default function Join({ onFullscreenChange }) {
       <div style={shellStyle}>
         <div style={layoutCombined}>
           <section style={slidesAreaStyle} aria-label="Slides">
-            <div ref={viewportRef} style={styles.slideViewport}>
+            <div
+              ref={viewportRef}
+              style={{
+                ...styles.slideViewport,
+                ...(contrastMode ? { backgroundColor: "#0E151D", border: `2px solid ${HC.divider}` } : null),
+              }}
+            >
               {!pdfDoc ? (
                 <div style={styles.waitWrap}>
-                  <div style={styles.waitTitle}>Waiting for slides…</div>
-                  <div style={styles.waitSub}>{status}</div>
+                  <div style={{ ...styles.waitTitle, color: contrastMode ? HC.text : "rgba(0,0,0,0.84)" }}>Waiting for slides…</div>
+                  <div style={{ ...styles.waitSub, color: contrastMode ? HC.text2 : "rgba(0,0,0,0.62)" }}>{status}</div>
                   {err && <div style={styles.errorPill}>{err}</div>}
                   <button type="button" onClick={leave} style={styles.leaveBtn}>
-                    Leave
+                    Leave Session
                   </button>
                 </div>
               ) : (
@@ -471,21 +529,23 @@ export default function Join({ onFullscreenChange }) {
                   </div>
 
                   <div style={styles.slideTopBar}>
-                    <div style={styles.fileChip} title={pdfName}>
-                      {pdfName || "Slides"}
-                    </div>
+                    <button type="button" onClick={leave} style={styles.leaveTopBtn}>
+                      ← Leave
+                    </button>
                     <div style={{ display: "flex", gap: "8px", alignItems: "center", pointerEvents: "auto" }}>
+                      <div style={styles.fileChip} title={pdfName}>
+                        {pdfName || "Slides"}
+                      </div>
                       <button type="button" onClick={openFullscreen} style={styles.topActionBtn}>
                         Fullscreen
-                      </button>
-                      <button type="button" onClick={leave} style={styles.topActionBtn}>
-                        Leave
                       </button>
                     </div>
                   </div>
 
                   <div style={styles.slideControls}>
-                    <div style={styles.counterPill}>Slide {page} / {numPages || pdfDoc.numPages}</div>
+                    <div style={styles.counterPill}>
+                      Slide {page} / {numPages || pdfDoc.numPages}
+                    </div>
                   </div>
 
                   {rendering && <div style={styles.statusPillFloat}>Rendering…</div>}
@@ -496,13 +556,97 @@ export default function Join({ onFullscreenChange }) {
           </section>
 
           <aside style={{ ...rightRailStyle, gap }} aria-label="Live transcript">
-            <section style={transcriptAreaStyle} aria-label="Transcript">
-              <div style={styles.transcriptHeader}>
-                <div style={styles.transcriptTitle}>Live Captions</div>
-                <div style={styles.transcriptBadge}>{joined ? "Connected" : "Not connected"}</div>
+            <section
+              style={{
+                ...transcriptAreaStyle,
+                backgroundColor: contrastMode ? HC.panelBg : COLORS.beigeDark,
+                border: contrastMode ? `1px solid ${HC.divider}` : "1px solid rgba(0,0,0,0.08)",
+              }}
+            >
+              <div
+                style={{
+                  ...styles.transcriptHeader,
+                  backgroundColor: contrastMode ? HC.headerBg : "rgba(255,255,255,0.55)",
+                  borderBottom: contrastMode ? `1px solid ${HC.divider}` : "1px solid rgba(0,0,0,0.08)",
+                }}
+              >
+                <div style={{ ...styles.transcriptTitle, color: contrastMode ? HC.text : COLORS.black }}>Live Captions</div>
+
+                <div style={{ position: "relative" }}>
+                  <button
+                    type="button"
+                    data-settings-btn="true"
+                    onClick={() => setSettingsOpen((v) => !v)}
+                    style={{
+                      ...styles.gearBtn,
+                      backgroundColor: settingsOpen ? "rgba(44,177,166,0.18)" : contrastMode ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.07)",
+                      border: settingsOpen ? "1px solid rgba(44,177,166,0.40)" : contrastMode ? `1px solid ${HC.divider}` : "1px solid rgba(0,0,0,0.10)",
+                    }}
+                    aria-label="Open settings"
+                  >
+                    <GearIcon size={17} color={contrastMode ? HC.text2 : "rgba(0,0,0,0.68)"} />
+                  </button>
+
+                  {settingsOpen && (
+                    <div
+                      data-settings-modal="true"
+                      role="dialog"
+                      style={{
+                        ...styles.settingsPopup,
+                        ...(contrastMode ? { backgroundColor: HC.panelBg, border: `1px solid ${HC.divider}` } : null),
+                      }}
+                    >
+                      <div style={{ ...styles.settingsTitle, color: contrastMode ? HC.text : "rgba(0,0,0,0.84)" }}>Caption Settings</div>
+
+                      <div style={styles.settingsRow}>
+                        <label style={{ ...styles.settingsLabel, color: contrastMode ? HC.text2 : "rgba(0,0,0,0.72)" }}>
+                          Font Size
+                          <span style={{ ...styles.settingsValue, color: contrastMode ? HC.text3 : COLORS.teal }}>{fontSize}px</span>
+                        </label>
+                        <div style={styles.sliderTrackWrap}>
+                          <input type="range" min={12} max={24} step={1} value={fontSize} onChange={(e) => setFontSize(Number(e.target.value))} style={styles.slider} />
+                          <div style={{ ...styles.sliderLabels, color: contrastMode ? HC.text3 : "rgba(0,0,0,0.46)" }}>
+                            <span>A</span>
+                            <span style={{ fontSize: "18px", fontWeight: 900 }}>A</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div style={styles.settingsRow}>
+                        <label style={{ ...styles.settingsLabel, color: contrastMode ? HC.text2 : "rgba(0,0,0,0.72)" }} htmlFor="contrast-toggle">
+                          High Contrast
+                          <span style={{ ...styles.settingsValue, color: contrastMode ? HC.teal : "rgba(0,0,0,0.44)" }}>{contrastMode ? "On" : "Off"}</span>
+                        </label>
+                        <button
+                          id="contrast-toggle"
+                          type="button"
+                          role="switch"
+                          aria-checked={contrastMode}
+                          onClick={() => setContrastMode((v) => !v)}
+                          style={{ ...styles.toggleTrack, backgroundColor: contrastMode ? COLORS.teal : "rgba(0,0,0,0.16)" }}
+                        >
+                          <span style={{ ...styles.toggleThumb, transform: contrastMode ? "translateX(20px)" : "translateX(2px)" }} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
-              <div style={styles.transcriptBody}>
-                <div style={styles.transcriptText}>{transcript}</div>
+
+              <div style={{ ...styles.transcriptBody, backgroundColor: contrastMode ? HC.panelBg : undefined }}>
+                <div
+                  style={{
+                    ...styles.transcriptText,
+                    fontSize: `${fontSize + (contrastMode ? 1 : 0)}px`,
+                    color: contrastMode ? HC.text : "rgba(0,0,0,0.76)",
+                    fontFamily: contrastMode ? hcFontStack : styles.transcriptText.fontFamily,
+                    fontWeight: contrastMode ? 700 : styles.transcriptText.fontWeight,
+                    lineHeight: contrastMode ? 1.85 : styles.transcriptText.lineHeight,
+                    letterSpacing: contrastMode ? "0.01em" : undefined,
+                  }}
+                >
+                  {transcript}
+                </div>
               </div>
             </section>
           </aside>
@@ -515,19 +659,16 @@ export default function Join({ onFullscreenChange }) {
             <button type="button" onClick={closeFullscreen} style={styles.fsCloseBtn} aria-label="Exit fullscreen">
               Exit
             </button>
-
             <div ref={fsViewportRef} style={styles.fsViewport}>
               <div style={styles.fsCanvasWrap}>
                 <canvas ref={fsCanvasRef} />
               </div>
             </div>
-
             <div style={styles.fsControls}>
               <div style={styles.fsCounter}>
                 {page}/{numPages || (pdfDoc ? pdfDoc.numPages : 0)}
               </div>
             </div>
-
             {rendering && <div style={styles.fsStatus}>Rendering…</div>}
             {err && <div style={styles.fsError}>{err}</div>}
           </div>
@@ -538,449 +679,59 @@ export default function Join({ onFullscreenChange }) {
 }
 
 const styles = {
-  page: {
-    minHeight: "100vh",
-    paddingTop: "var(--header-h)",
-    boxSizing: "border-box",
-    backgroundColor: COLORS.pageBg,
-    overflowX: "hidden",
-    transition: "opacity 320ms ease, transform 420ms ease",
-  },
-  centerFrame: {
-    minHeight: "calc(100vh - var(--header-h))",
-    width: "100%",
-    display: "grid",
-    placeItems: "center",
-    padding: "18px",
-    boxSizing: "border-box",
-  },
-  shell: {
-    maxWidth: "1440px",
-    margin: "0 auto",
-    boxSizing: "border-box",
-  },
-  joinCard: {
-    width: "min(640px, 100%)",
-    margin: "0 auto",
-    borderRadius: "24px",
-    backgroundColor: "rgba(255,255,255,0.92)",
-    border: "1px solid rgba(0,0,0,0.10)",
-    boxShadow: "0 28px 74px rgba(0,0,0,0.18)",
-    padding: "18px",
-    display: "grid",
-    gap: "10px",
-    backdropFilter: "blur(10px)",
-    WebkitBackdropFilter: "blur(10px)",
-  },
-  joinTitle: {
-    fontFamily: "Merriweather, serif",
-    fontSize: "clamp(22px, 2.4vw, 28px)",
-    fontWeight: 900,
-    letterSpacing: "-0.02em",
-    color: COLORS.black,
-  },
-  joinSub: {
-    fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "clamp(13px, 1.3vw, 15px)",
-    fontWeight: 650,
-    lineHeight: 1.6,
-    color: "rgba(0,0,0,0.66)",
-  },
-  joinRow: {
-    display: "flex",
-    gap: "10px",
-    alignItems: "center",
-    flexWrap: "wrap",
-    marginTop: "6px",
-  },
-  joinInput: {
-    flex: "1 1 220px",
-    height: "52px",
-    borderRadius: "16px",
-    border: "1px solid rgba(0,0,0,0.14)",
-    backgroundColor: "rgba(245,252,239,0.65)",
-    padding: "0 14px",
-    fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "18px",
-    fontWeight: 900,
-    letterSpacing: "0.12em",
-    outline: "none",
-    color: "rgba(0,0,0,0.80)",
-    textTransform: "uppercase",
-  },
-  joinBtn: {
-    height: "52px",
-    padding: "0 16px",
-    borderRadius: "16px",
-    border: "none",
-    cursor: "pointer",
-    background: `linear-gradient(135deg, ${COLORS.teal}, rgba(44,177,166,0.82))`,
-    color: COLORS.white,
-    fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "14px",
-    fontWeight: 900,
-    boxShadow: "0 16px 38px rgba(0,0,0,0.16)",
-  },
-  joinHint: {
-    fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "13px",
-    fontWeight: 650,
-    color: "rgba(0,0,0,0.62)",
-  },
-  layoutBase: {
-    display: "grid",
-    gap: "14px",
-    alignItems: "stretch",
-    minHeight: 0,
-  },
-  layoutWide: {
-    gridTemplateColumns: "minmax(0, 1fr) clamp(340px, 32vw, 450px)",
-    gridTemplateRows: "1fr",
-  },
-  layoutNarrow: {
-    gridTemplateColumns: "1fr",
-    gridTemplateRows: "auto auto",
-  },
-  slidesArea: {
-    width: "100%",
-    borderRadius: "22px",
-    overflow: "hidden",
-    minHeight: 0,
-  },
-  slideViewport: {
-    position: "relative",
-    width: "100%",
-    height: "100%",
-    backgroundColor: COLORS.beige,
-    borderRadius: "22px",
-    border: "2px dashed rgba(0,0,0,0.14)",
-    boxShadow: "0 6px 12px rgba(0,0,0,0.08)",
-    overflow: "hidden",
-    display: "grid",
-    placeItems: "center",
-    transition: "box-shadow 220ms ease, border-color 160ms ease",
-    minHeight: 0,
-  },
-  waitWrap: {
-    width: "min(680px, 92%)",
-    display: "grid",
-    gap: "10px",
-    textAlign: "center",
-    padding: "16px",
-  },
-  waitTitle: {
-    fontFamily: "Merriweather, serif",
-    fontSize: "clamp(20px, 2.4vw, 28px)",
-    fontWeight: 900,
-    color: "rgba(0,0,0,0.84)",
-  },
-  waitSub: {
-    fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "clamp(13px, 1.3vw, 15px)",
-    fontWeight: 650,
-    lineHeight: 1.6,
-    color: "rgba(0,0,0,0.62)",
-  },
-  leaveBtn: {
-    justifySelf: "center",
-    border: "1px solid rgba(0,0,0,0.12)",
-    backgroundColor: "rgba(0,0,0,0.06)",
-    borderRadius: "16px",
-    padding: "10px 12px",
-    cursor: "pointer",
-    fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "13px",
-    fontWeight: 850,
-    color: "rgba(0,0,0,0.74)",
-    width: "fit-content",
-  },
-  canvasWrap: {
-    width: "100%",
-    height: "100%",
-    display: "grid",
-    placeItems: "center",
-    padding: "16px",
-    boxSizing: "border-box",
-  },
-  slideTopBar: {
-    position: "absolute",
-    top: "10px",
-    left: "10px",
-    right: "10px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: "10px",
-    pointerEvents: "none",
-  },
-  fileChip: {
-    pointerEvents: "auto",
-    maxWidth: "62%",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-    backgroundColor: "rgba(255,255,255,0.75)",
-    border: "1px solid rgba(0,0,0,0.10)",
-    borderRadius: "999px",
-    padding: "8px 10px",
-    fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "clamp(11px, 1.15vw, 12.5px)",
-    fontWeight: 850,
-    color: "rgba(0,0,0,0.74)",
-    backdropFilter: "blur(6px)",
-    WebkitBackdropFilter: "blur(6px)",
-  },
-  topActionBtn: {
-    pointerEvents: "auto",
-    border: "1px solid rgba(0,0,0,0.12)",
-    backgroundColor: "rgba(255,255,255,0.78)",
-    borderRadius: "14px",
-    padding: "8px 10px",
-    cursor: "pointer",
-    fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "clamp(11px, 1.15vw, 12.5px)",
-    fontWeight: 900,
-    color: "rgba(0,0,0,0.74)",
-    backdropFilter: "blur(6px)",
-    WebkitBackdropFilter: "blur(6px)",
-  },
-  slideControls: {
-    position: "absolute",
-    left: "12px",
-    right: "12px",
-    bottom: "12px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: "10px",
-    pointerEvents: "none",
-  },
-  counterPill: {
-    pointerEvents: "none",
-    backgroundColor: "rgba(44,177,166,0.14)",
-    border: "1px solid rgba(44,177,166,0.28)",
-    borderRadius: "999px",
-    padding: "10px 12px",
-    fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "clamp(12px, 1.2vw, 13px)",
-    fontWeight: 950,
-    color: "rgba(0,0,0,0.72)",
-    backdropFilter: "blur(6px)",
-    WebkitBackdropFilter: "blur(6px)",
-  },
-  statusPillFloat: {
-    position: "absolute",
-    top: "54px",
-    right: "12px",
-    backgroundColor: "rgba(0,0,0,0.74)",
-    color: COLORS.white,
-    padding: "7px 10px",
-    borderRadius: "999px",
-    fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "clamp(11px, 1.1vw, 12px)",
-    fontWeight: 900,
-  },
-  errorPill: {
-    justifySelf: "center",
-    backgroundColor: "rgba(232,91,91,0.92)",
-    color: COLORS.white,
-    padding: "10px 12px",
-    borderRadius: "14px",
-    fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "clamp(12px, 1.2vw, 13px)",
-    fontWeight: 850,
-    width: "fit-content",
-    maxWidth: "min(900px, 92vw)",
-  },
-  errorPillFloat: {
-    position: "absolute",
-    left: "12px",
-    right: "12px",
-    top: "54px",
-    backgroundColor: "rgba(232,91,91,0.92)",
-    color: COLORS.white,
-    padding: "10px 12px",
-    borderRadius: "14px",
-    fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "clamp(12px, 1.2vw, 13px)",
-    fontWeight: 850,
-    textAlign: "center",
-  },
-  rightRail: {
-    width: "100%",
-    display: "flex",
-    flexDirection: "column",
-    gap: "14px",
-    minHeight: 0,
-  },
-  transcriptArea: {
-    width: "100%",
-    flex: "1 1 0",
-    minHeight: 0,
-    borderRadius: "22px",
-    backgroundColor: COLORS.beigeDark,
-    border: "1px solid rgba(0,0,0,0.08)",
-    boxShadow: "0 4px 8px rgba(0,0,0,0.06)",
-    overflow: "hidden",
-    display: "flex",
-    flexDirection: "column",
-  },
-  transcriptHeader: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: "10px",
-    padding: "12px 14px",
-    borderBottom: "1px solid rgba(0,0,0,0.08)",
-    backgroundColor: "rgba(255,255,255,0.55)",
-    flexWrap: "wrap",
-    flexShrink: 0,
-  },
-  transcriptTitle: {
-    fontFamily: "Merriweather, serif",
-    fontSize: "clamp(16px, 1.7vw, 18px)",
-    fontWeight: 900,
-    letterSpacing: "-0.02em",
-    color: COLORS.black,
-  },
-  transcriptBadge: {
-    fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "clamp(11px, 1.1vw, 12px)",
-    fontWeight: 900,
-    padding: "6px 10px",
-    borderRadius: "999px",
-    backgroundColor: "rgba(0,0,0,0.08)",
-    color: "rgba(0,0,0,0.70)",
-    whiteSpace: "nowrap",
-  },
-  transcriptBody: {
-    flex: "1 1 0",
-    minHeight: 0,
-    padding: "14px",
-    overflow: "auto",
-  },
-  transcriptText: {
-    fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "clamp(14px, 1.25vw, 15px)",
-    lineHeight: 1.7,
-    fontWeight: 600,
-    color: "rgba(0,0,0,0.76)",
-    whiteSpace: "pre-wrap",
-  },
-  fsOverlay: {
-    position: "fixed",
-    inset: 0,
-    backgroundColor: "rgba(5, 6, 7, 0.96)",
-    zIndex: 20000,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 0,
-  },
-  fsCard: {
-    width: "100vw",
-    height: "100vh",
-    position: "relative",
-    display: "flex",
-    flexDirection: "column",
-  },
-  fsCloseBtn: {
-    position: "fixed",
-    top: "8px",
-    right: "8px",
-    zIndex: 20003,
-    border: "1px solid rgba(255,182,193,0.40)",
-    backgroundColor: "rgba(255,182,193,0.25)",
-    borderRadius: "12px",
-    padding: "8px 14px",
-    cursor: "pointer",
-    fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "13px",
-    fontWeight: 700,
-    letterSpacing: "0.02em",
-    color: "rgba(255,105,130,0.95)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    boxShadow: "0 4px 12px rgba(255,105,130,0.15)",
-    backdropFilter: "blur(10px)",
-    WebkitBackdropFilter: "blur(10px)",
-    transition: "all 0.2s ease",
-  },
-  fsViewport: {
-    position: "fixed",
-    top: 0,
-    left: 0,
-    width: "100vw",
-    height: "100vh",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    overflow: "hidden",
-    zIndex: 20001,
-  },
-  fsCanvasWrap: {
-    width: "100%",
-    height: "100%",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: "8px",
-    boxSizing: "border-box",
-  },
-  fsControls: {
-    position: "fixed",
-    left: "50%",
-    transform: "translateX(-50%)",
-    bottom: "clamp(12px, 3vh, 20px)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: "clamp(6px, 2vw, 10px)",
-    pointerEvents: "none",
-    zIndex: 20002,
-  },
-  fsCounter: {
-    pointerEvents: "none",
-    backgroundColor: "rgba(44,177,166,0.82)",
-    border: "1px solid rgba(44,177,166,0.40)",
-    borderRadius: "999px",
-    padding: "10px 16px",
-    fontFamily: "Inter, system-ui, -apple-system, sans-serif",
-    fontSize: "14px",
-    fontWeight: 950,
-    color: "rgba(255,255,255,0.96)",
-    backdropFilter: "blur(8px)",
-    WebkitBackdropFilter: "blur(8px)",
-    whiteSpace: "nowrap",
-  },
-  fsStatus: {
-    position: "fixed",
-    top: "8px",
-    left: "50%",
-    transform: "translateX(-50%)",
-    backgroundColor: "rgba(0,0,0,0.74)",
-    color: COLORS.white,
-    padding: "6px 12px",
-    borderRadius: "999px",
-    fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "11px",
-    fontWeight: 900,
-    zIndex: 20002,
-  },
-  fsError: {
-    position: "fixed",
-    left: "8px",
-    right: "8px",
-    top: "8px",
-    backgroundColor: "rgba(232,91,91,0.92)",
-    color: COLORS.white,
-    padding: "10px 14px",
-    borderRadius: "14px",
-    fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "12px",
-    fontWeight: 850,
-    textAlign: "center",
-    zIndex: 20002,
-  },
+  page: { minHeight: "100vh", paddingTop: "var(--header-h)", boxSizing: "border-box", overflowX: "hidden", transition: "opacity 320ms ease, transform 420ms ease" },
+  centerFrame: { minHeight: "calc(100vh - var(--header-h))", width: "100%", display: "grid", placeItems: "center", padding: "18px", boxSizing: "border-box" },
+  shell: { maxWidth: "1440px", margin: "0 auto", boxSizing: "border-box" },
+  joinCard: { width: "min(640px, 100%)", margin: "0 auto", borderRadius: "24px", backgroundColor: "rgba(255,255,255,0.92)", border: "1px solid rgba(0,0,0,0.10)", boxShadow: "0 28px 74px rgba(0,0,0,0.18)", padding: "18px", display: "grid", gap: "10px", backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)" },
+  joinTitle: { fontFamily: "Merriweather, serif", fontSize: "clamp(22px, 2.4vw, 28px)", fontWeight: 900, letterSpacing: "-0.02em", color: COLORS.black },
+  joinSub: { fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif", fontSize: "clamp(13px, 1.3vw, 15px)", fontWeight: 650, lineHeight: 1.6, color: "rgba(0,0,0,0.66)" },
+  joinRow: { display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" },
+  joinInput: { width: "100%", boxSizing: "border-box", height: "52px", borderRadius: "16px", border: "1px solid rgba(0,0,0,0.14)", backgroundColor: "rgba(245,252,239,0.65)", padding: "0 14px", fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif", fontSize: "18px", fontWeight: 900, letterSpacing: "0.12em", outline: "none", color: "rgba(0,0,0,0.80)", textTransform: "uppercase" },
+  joinBtn: { height: "52px", padding: "0 20px", borderRadius: "16px", border: "none", cursor: "pointer", background: `linear-gradient(135deg, ${COLORS.teal}, rgba(44,177,166,0.82))`, color: COLORS.white, fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif", fontSize: "14px", fontWeight: 900, boxShadow: "0 16px 38px rgba(0,0,0,0.16)", flexShrink: 0 },
+  joinHint: { fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif", fontSize: "13px", fontWeight: 650 },
+  layoutBase: { display: "grid", gap: "14px", alignItems: "stretch", minHeight: 0 },
+  layoutWide: { gridTemplateColumns: "minmax(0, 1fr) clamp(340px, 32vw, 450px)", gridTemplateRows: "1fr" },
+  layoutNarrow: { gridTemplateColumns: "1fr", gridTemplateRows: "auto auto" },
+  slidesArea: { width: "100%", borderRadius: "22px", overflow: "hidden", minHeight: 0 },
+  slideViewport: { position: "relative", width: "100%", height: "100%", backgroundColor: COLORS.beige, borderRadius: "22px", border: "2px dashed rgba(0,0,0,0.14)", boxShadow: "0 6px 12px rgba(0,0,0,0.08)", overflow: "hidden", display: "grid", placeItems: "center", transition: "box-shadow 220ms ease, border-color 160ms ease", minHeight: 0 },
+  waitWrap: { width: "min(680px, 92%)", display: "grid", gap: "10px", textAlign: "center", padding: "16px" },
+  waitTitle: { fontFamily: "Merriweather, serif", fontSize: "clamp(20px, 2.4vw, 28px)", fontWeight: 900, color: "rgba(0,0,0,0.84)" },
+  waitSub: { fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif", fontSize: "clamp(13px, 1.3vw, 15px)", fontWeight: 650, lineHeight: 1.6, color: "rgba(0,0,0,0.62)" },
+  leaveBtn: { justifySelf: "center", border: "1px solid rgba(0,0,0,0.12)", backgroundColor: "rgba(0,0,0,0.06)", borderRadius: "16px", padding: "10px 16px", cursor: "pointer", fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif", fontSize: "13px", fontWeight: 850, color: "rgba(0,0,0,0.74)", width: "fit-content" },
+  canvasWrap: { width: "100%", height: "100%", display: "grid", placeItems: "center", padding: "16px", boxSizing: "border-box" },
+  slideTopBar: { position: "absolute", top: "10px", left: "10px", right: "10px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px", pointerEvents: "none" },
+  leaveTopBtn: { pointerEvents: "auto", border: "1px solid rgba(220,60,60,0.28)", backgroundColor: "rgba(255,255,255,0.82)", borderRadius: "14px", padding: "8px 12px", cursor: "pointer", fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif", fontSize: "clamp(11px, 1.15vw, 12.5px)", fontWeight: 900, color: "rgba(200,50,50,0.90)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)" },
+  fileChip: { pointerEvents: "auto", maxWidth: "46%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", backgroundColor: "rgba(255,255,255,0.75)", border: "1px solid rgba(0,0,0,0.10)", borderRadius: "999px", padding: "8px 10px", fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif", fontSize: "clamp(11px, 1.15vw, 12.5px)", fontWeight: 850, color: "rgba(0,0,0,0.74)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)" },
+  topActionBtn: { pointerEvents: "auto", border: "1px solid rgba(0,0,0,0.12)", backgroundColor: "rgba(255,255,255,0.78)", borderRadius: "14px", padding: "8px 10px", cursor: "pointer", fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif", fontSize: "clamp(11px, 1.15vw, 12.5px)", fontWeight: 900, color: "rgba(0,0,0,0.74)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)" },
+  slideControls: { position: "absolute", left: "12px", right: "12px", bottom: "12px", display: "flex", alignItems: "center", justifyContent: "center", gap: "10px", pointerEvents: "none" },
+  counterPill: { pointerEvents: "none", backgroundColor: "rgba(44,177,166,0.14)", border: "1px solid rgba(44,177,166,0.28)", borderRadius: "999px", padding: "10px 12px", fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif", fontSize: "clamp(12px, 1.2vw, 13px)", fontWeight: 950, color: "rgba(0,0,0,0.72)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)" },
+  statusPillFloat: { position: "absolute", top: "54px", right: "12px", backgroundColor: "rgba(0,0,0,0.74)", color: COLORS.white, padding: "7px 10px", borderRadius: "999px", fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif", fontSize: "clamp(11px, 1.1vw, 12px)", fontWeight: 900 },
+  errorPill: { justifySelf: "center", backgroundColor: "rgba(232,91,91,0.92)", color: COLORS.white, padding: "10px 12px", borderRadius: "14px", fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif", fontSize: "clamp(12px, 1.2vw, 13px)", fontWeight: 850, width: "fit-content", maxWidth: "min(900px, 92vw)" },
+  errorPillFloat: { position: "absolute", left: "12px", right: "12px", top: "54px", backgroundColor: "rgba(232,91,91,0.92)", color: COLORS.white, padding: "10px 12px", borderRadius: "14px", fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif", fontSize: "clamp(12px, 1.2vw, 13px)", fontWeight: 850, textAlign: "center" },
+  rightRail: { width: "100%", display: "flex", flexDirection: "column", gap: "14px", minHeight: 0 },
+  transcriptArea: { width: "100%", flex: "1 1 0", minHeight: 0, borderRadius: "22px", backgroundColor: COLORS.beigeDark, border: "1px solid rgba(0,0,0,0.08)", boxShadow: "0 4px 8px rgba(0,0,0,0.06)", overflow: "hidden", display: "flex", flexDirection: "column" },
+  transcriptHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px", padding: "12px 14px", borderBottom: "1px solid rgba(0,0,0,0.08)", backgroundColor: "rgba(255,255,255,0.55)", flexWrap: "wrap", flexShrink: 0 },
+  transcriptTitle: { fontFamily: "Merriweather, serif", fontSize: "clamp(16px, 1.7vw, 18px)", fontWeight: 900, letterSpacing: "-0.02em" },
+  transcriptBody: { flex: "1 1 0", minHeight: 0, padding: "14px", overflow: "auto" },
+  transcriptText: { fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif", lineHeight: 1.7, fontWeight: 600, whiteSpace: "pre-wrap", transition: "font-size 150ms ease" },
+  gearBtn: { display: "flex", alignItems: "center", justifyContent: "center", width: "34px", height: "34px", borderRadius: "10px", cursor: "pointer", padding: 0, transition: "background-color 140ms ease, border-color 140ms ease" },
+  settingsPopup: { position: "absolute", top: "calc(100% + 8px)", right: 0, zIndex: 200, width: "clamp(220px, 30vw, 260px)", borderRadius: "18px", backgroundColor: "rgba(255,255,255,0.97)", border: "1px solid rgba(0,0,0,0.10)", boxShadow: "0 20px 54px rgba(0,0,0,0.20)", padding: "14px", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", display: "grid", gap: "14px" },
+  settingsTitle: { fontFamily: "Merriweather, serif", fontSize: "14px", fontWeight: 900, color: "rgba(0,0,0,0.84)", letterSpacing: "-0.01em" },
+  settingsRow: { display: "grid", gap: "8px" },
+  settingsLabel: { display: "flex", alignItems: "center", justifyContent: "space-between", fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif", fontSize: "12px", fontWeight: 800, color: "rgba(0,0,0,0.72)", letterSpacing: "0.02em", textTransform: "uppercase" },
+  settingsValue: { fontWeight: 700, color: COLORS.teal, textTransform: "none", letterSpacing: 0, fontSize: "12px" },
+  sliderTrackWrap: { display: "grid", gap: "4px" },
+  slider: { width: "100%", accentColor: COLORS.teal, cursor: "pointer", height: "4px" },
+  sliderLabels: { disnplay: "flex", justifyContent: "space-between", fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif", fontSize: "11px", fontWeight: 700, color: "rgba(0,0,0,0.46)", paddingTop: "2px" },
+  toggleTrack: { position: "relative", width: "44px", height: "24px", borderRadius: "999px", border: "none", cursor: "pointer", padding: 0, transition: "background-color 200ms ease", flexShrink: 0 },
+  toggleThumb: { position: "absolute", top: "3px", width: "18px", height: "18px", borderRadius: "50%", backgroundColor: COLORS.white, boxShadow: "0 1px 4px rgba(0,0,0,0.28)", transition: "transform 200ms ease", display: "block" },
+  fsOverlay: { position: "fixed", inset: 0, backgroundColor: "rgba(5,6,7,0.96)", zIndex: 20000, display: "flex", alignItems: "center", justifyContent: "center", padding: 0 },
+  fsCard: { width: "100vw", height: "100vh", position: "relative", display: "flex", flexDirection: "column" },
+  fsCloseBtn: { position: "fixed", top: "8px", right: "8px", zIndex: 20003, border: "1px solid rgba(255,182,193,0.40)", backgroundColor: "rgba(255,182,193,0.25)", borderRadius: "12px", padding: "8px 14px", cursor: "pointer", fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif", fontSize: "13px", fontWeight: 700, color: "rgba(255,105,130,0.95)", display: "flex", alignItems: "center", justifyContent: "center", backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)" },
+  fsViewport: { position: "fixed", top: 0, left: 0, width: "100vw", height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", zIndex: 20001 },
+  fsCanvasWrap: { width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: "8px", boxSizing: "border-box" },
+  fsControls: { position: "fixed", left: "50%", transform: "translateX(-50%)", bottom: "clamp(12px, 3vh, 20px)", display: "flex", alignItems: "center", justifyContent: "center", gap: "clamp(6px, 2vw, 10px)", pointerEvents: "none", zIndex: 20002 },
+  fsCounter: { pointerEvents: "none", backgroundColor: "rgba(44,177,166,0.82)", border: "1px solid rgba(44,177,166,0.40)", borderRadius: "999px", padding: "10px 16px", fontFamily: "Inter, system-ui, -apple-system, sans-serif", fontSize: "14px", fontWeight: 950, color: "rgba(255,255,255,0.96)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", whiteSpace: "nowrap" },
+  fsStatus: { position: "fixed", top: "8px", left: "50%", transform: "translateX(-50%)", backgroundColor: "rgba(0,0,0,0.74)", color: COLORS.white, padding: "6px 12px", borderRadius: "999px", fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif", fontSize: "11px", fontWeight: 900, zIndex: 20002 },
+  fsError: { position: "fixed", left: "8px", right: "8px", top: "8px", backgroundColor: "rgba(232,91,91,0.92)", color: COLORS.white, padding: "10px 14px", borderRadius: "14px", fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif", fontSize: "12px", fontWeight: 850, textAlign: "center", zIndex: 20002 },
 };
