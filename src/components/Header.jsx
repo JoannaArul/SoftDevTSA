@@ -14,6 +14,7 @@ const NAV_LINKS = [
   { to: "/", label: "Home" },
   { to: "/host", label: "Host" },
   { to: "/join", label: "Join" },
+  { to: "/why-voxia", label: "Why Voxia" },
 ];
 
 export default function Header({ hidden = false }) {
