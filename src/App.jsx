@@ -8,6 +8,7 @@ import Join from "./pages/Join";
 import Professional from "./pages/Professional";
 import FamilyAndFriends from "./pages/FamilyAndFriends";
 import Student from "./pages/Student";
+import WhyVoxia from "./pages/WhyVoxia";
 
 export default function App() {
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -30,6 +31,7 @@ export default function App() {
           element={<div style={{ paddingTop: "calc(var(--header-h) + 24px)" }}>Our Mission</div>}
         />
 
+        <Route path="/why-voxia" element={<WhyVoxia />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
