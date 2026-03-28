@@ -12,9 +12,9 @@ const COLORS = {
 
 const NAV_LINKS = [
   { to: "/", label: "Home" },
+    { to: "/why-voxia", label: "Why Voxia" },
   { to: "/host", label: "Host" },
-  { to: "/join", label: "Join" },
-  { to: "/why-voxia", label: "Why Voxia" },
+  { to: "/join", label: "Join" }
 ];
 
 export default function Header({ hidden = false }) {

@@ -12,7 +12,6 @@ const COLORS = {
 const FONT = "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif";
 const SERIF = "Merriweather, serif";
 
-/* ── tiny reusable hooks (same pattern as Home.jsx) ── */
 
 function useInViewOnce(threshold = 0.3) {
   const ref = useRef(null);
@@ -407,7 +406,7 @@ export default function WhyVoxia() {
                     Mainstream enrollment
                   </div>
                   <p style={{ fontFamily: FONT, fontSize: "14px", lineHeight: 1.6, color: "rgba(0,0,0,0.7)", marginTop: "8px", fontWeight: 500 }}>
-                    of deaf children attend mainstream public schools. That means they learn in classrooms that are not specialized for deaf students.
+                    deaf children attend mainstream public schools, meaning they learn in classrooms that are not specifically designed for deaf students or structured around deaf-centered communication. 
                   </p>
                 </SpotlightCard>
               </TiltCard>
@@ -759,7 +758,7 @@ export default function WhyVoxia() {
               },
               {
                 label: "Home & Community",
-                desc: "Family gatherings, religious services, and community events are all environments where communication barriers exist. Voxia can support accessibility in any setting where someone is speaking.",
+                desc: "Family gatherings, religious services, and more are all environments where communication barriers exist. Voxia supports accessibility in any setting where someone is speaking.",
               },
             ].map((env, i) => (
               <FadeInSection key={env.label} delay={i * 120}>
