@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
+import WhyUsHero from "../assets/WhyUsHero.jpg";
 
 const COLORS = {
   teal: "#2CB1A6",
@@ -11,7 +12,6 @@ const COLORS = {
 
 const FONT = "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif";
 const SERIF = "Merriweather, serif";
-
 
 function useInViewOnce(threshold = 0.3) {
   const ref = useRef(null);
@@ -39,8 +39,6 @@ function useWindowWidth() {
   return w;
 }
 
-/* ── lightweight animation components (no extra deps) ── */
-
 function SplitTextReveal({ text, delay = 0, as: Tag = "span", style = {} }) {
   const [ref, seen] = useInViewOnce(0.3);
   const words = text.split(" ");
@@ -64,11 +62,9 @@ function SplitTextReveal({ text, delay = 0, as: Tag = "span", style = {} }) {
   );
 }
 
-/* ── rotating text (react-bits inspired) ── */
-
 function RotatingText({ words, interval = 2400, color = COLORS.teal }) {
   const [index, setIndex] = useState(0);
-  const [animState, setAnimState] = useState("in"); // "in" | "out"
+  const [animState, setAnimState] = useState("in");
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -145,8 +141,6 @@ function FadeInSection({ children, delay = 0, style = {} }) {
   );
 }
 
-/* ── floating dots background ── */
-
 function FloatingDots({ count = 24, color = COLORS.teal }) {
   const dots = useMemo(() => {
     return Array.from({ length: count }, (_, i) => ({
@@ -186,8 +180,6 @@ function FloatingDots({ count = 24, color = COLORS.teal }) {
     </>
   );
 }
-
-/* ── spotlight card ── */
 
 function SpotlightCard({ children, style = {} }) {
   const cardRef = useRef(null);
@@ -234,8 +226,6 @@ function SpotlightCard({ children, style = {} }) {
   );
 }
 
-/* ── tilt card ── */
-
 function TiltCard({ children, style = {} }) {
   const ref = useRef(null);
   const [transform, setTransform] = useState("perspective(600px) rotateX(0deg) rotateY(0deg)");
@@ -268,8 +258,6 @@ function TiltCard({ children, style = {} }) {
   );
 }
 
-/* ── main page ── */
-
 export default function WhyVoxia() {
   const navigate = useNavigate();
   const [mounted, setMounted] = useState(false);
@@ -294,18 +282,34 @@ export default function WhyVoxia() {
         transition: "opacity 380ms ease, transform 420ms ease",
       }}
     >
-      {/* ── HERO ── */}
       <section
         style={{
           position: "relative",
           width: "100%",
           padding: isSmall ? "60px 18px 50px" : "80px 24px 70px",
           boxSizing: "border-box",
-          backgroundColor: COLORS.gray,
           overflow: "hidden",
           textAlign: "center",
         }}
       >
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            backgroundImage: `url(${WhyUsHero})`,
+            backgroundSize: "cover",
+            backgroundPosition: "center",
+            backgroundRepeat: "no-repeat",
+          }}
+        />
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            backgroundColor: "rgba(73,74,72,0.72)",
+          }}
+        />
+
         <FloatingDots count={30} />
 
         <div style={{ position: "relative", zIndex: 2, maxWidth: "900px", margin: "0 auto" }}>
@@ -348,7 +352,6 @@ export default function WhyVoxia() {
         </div>
       </section>
 
-      {/* ── THE PROBLEM (Stats) ── */}
       <section
         style={{
           width: "100%",
@@ -406,7 +409,7 @@ export default function WhyVoxia() {
                     Mainstream enrollment
                   </div>
                   <p style={{ fontFamily: FONT, fontSize: "14px", lineHeight: 1.6, color: "rgba(0,0,0,0.7)", marginTop: "8px", fontWeight: 500 }}>
-                    deaf children attend mainstream public schools, meaning they learn in classrooms that are not specifically designed for deaf students or structured around deaf-centered communication. 
+                    deaf children attend mainstream public schools, meaning they learn in classrooms that are not specifically designed for deaf students or structured around deaf-centered communication.
                   </p>
                 </SpotlightCard>
               </TiltCard>
@@ -463,7 +466,6 @@ export default function WhyVoxia() {
         </div>
       </section>
 
-      {/* ── HOW IT WORKS ── */}
       <section
         style={{
           width: "100%",
@@ -515,7 +517,7 @@ export default function WhyVoxia() {
               {
                 step: "1",
                 title: "Teacher creates a session",
-                desc: "A unique join code is generated instantly. The teacher uploads their presentation slides as a PDF. This ensures that every student sees the exact same slide formatting, regardless of device or screen size.",
+                desc: "A unique join code is generated instantly. The teacher uploads their presentation slides as a PDF.",
               },
               {
                 step: "2",
@@ -525,7 +527,7 @@ export default function WhyVoxia() {
               {
                 step: "3",
                 title: "Speak and caption",
-                desc: "The teacher unmutes their microphone and speaks naturally. As they speak, it captures their speech and converts it into live captions instantly, showing up on every student's screen.",
+                desc: "The teacher unmutes their microphone and as they speak, it converts their speech into live captions, showing up on everyone's screen.",
               },
             ].map((item, i) => (
               <FadeInSection key={item.step} delay={i * 120}>
@@ -586,7 +588,6 @@ export default function WhyVoxia() {
         </div>
       </section>
 
-      {/* ── WHAT SETS US APART ── */}
       <section
         style={{
           width: "100%",
@@ -699,7 +700,6 @@ export default function WhyVoxia() {
         </div>
       </section>
 
-      {/* ── WHO WE REACH ── */}
       <section
         style={{
           width: "100%",
@@ -801,7 +801,6 @@ export default function WhyVoxia() {
         </div>
       </section>
 
-      {/* ── FUTURE VISION ── */}
       <section
         style={{
           width: "100%",
@@ -844,11 +843,7 @@ export default function WhyVoxia() {
           <div style={{ display: "grid", gap: "14px", marginTop: "32px" }}>
             {[
               "Enhanced speech-to-text accuracy",
-              "Downloadable transcripts after every session",
               "AI-generated notes and study sets from session content",
-              "Customizable caption display and accessibility settings",
-              "Improved fullscreen navigation for phones and tablets",
-              "Teacher dashboard with participant lists and session management",
             ].map((item, i) => (
               <FadeInSection key={item} delay={i * 80}>
                 <div
@@ -898,7 +893,6 @@ export default function WhyVoxia() {
         </div>
       </section>
 
-      {/* ── CTA FOOTER ── */}
       <section
         style={{
           width: "100%",
