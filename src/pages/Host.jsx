@@ -16,7 +16,6 @@ export default function Host() {
   const [hovered, setHovered] = useState(null);
   const [pressed, setPressed] = useState(null);
   const [compact, setCompact] = useState(false);
-  const [studentMic, setStudentMic] = useState(false);
 
   useEffect(() => {
     const t = requestAnimationFrame(() => setMounted(true));
@@ -87,10 +86,8 @@ export default function Host() {
   const handlePick = (roleKey, route) => {
     try {
       localStorage.setItem("voxia_role", roleKey);
-      // Store student mic preference so the session inherits it
-      localStorage.setItem("voxia_student_mic", studentMic ? "1" : "0");
     } catch {}
-    navigate(route, { state: { studentMicEnabled: studentMic } });
+    navigate(route);
   };
 
   const cardStyle = {
@@ -201,59 +198,11 @@ export default function Host() {
             })}
           </div>
 
-          {/* Footer row: Student Mic toggle left, Joining link right */}
+          {/* Footer row */}
           <div style={{
             ...styles.footerRow,
             marginTop: compact ? "2px" : styles.footerRow.marginTop,
-            gap: compact ? "8px" : "12px",
           }}>
-            {/* Student Mic Toggle */}
-            <button
-              type="button"
-              role="switch"
-              aria-checked={studentMic}
-              onClick={() => setStudentMic((v) => !v)}
-              style={{
-                ...styles.micToggleWrap,
-                backgroundColor: studentMic
-                  ? "rgba(44,177,166,0.10)"
-                  : "rgba(0,0,0,0.04)",
-                border: studentMic
-                  ? "1px solid rgba(44,177,166,0.32)"
-                  : "1px solid rgba(0,0,0,0.10)",
-              }}
-              title="Allow students to use microphones in this session"
-            >
-              <span style={styles.micToggleIcon} aria-hidden="true">
-                {studentMic ? "🎙️" : "🔇"}
-              </span>
-              <span style={styles.micToggleTextWrap}>
-                <span style={{
-                  ...styles.micToggleLabel,
-                  color: studentMic ? COLORS.teal : "rgba(0,0,0,0.70)",
-                }}>
-                  Student Mic
-                </span>
-                <span style={{
-                  ...styles.micToggleState,
-                  color: studentMic ? COLORS.teal : "rgba(0,0,0,0.40)",
-                }}>
-                  {studentMic ? "On" : "Off"}
-                </span>
-              </span>
-              {/* Toggle pill */}
-              <span style={{
-                ...styles.toggleTrack,
-                backgroundColor: studentMic ? COLORS.teal : "rgba(0,0,0,0.16)",
-              }}>
-                <span style={{
-                  ...styles.toggleThumb,
-                  transform: studentMic ? "translateX(18px)" : "translateX(2px)",
-                }} />
-              </span>
-            </button>
-
-            {/* Joining instead link */}
             <button
               type="button"
               onClick={() => navigate("/join")}
@@ -428,73 +377,8 @@ const styles = {
   footerRow: {
     display: "flex",
     alignItems: "center",
-    justifyContent: "space-between",
+    justifyContent: "flex-end",
     marginTop: "4px",
-    flexWrap: "wrap",
-    gap: "10px",
-  },
-
-  // Student mic toggle button
-  micToggleWrap: {
-    display: "flex",
-    alignItems: "center",
-    gap: "8px",
-    borderRadius: "14px",
-    padding: "8px 12px 8px 10px",
-    cursor: "pointer",
-    transition: "background-color 160ms ease, border-color 160ms ease",
-    outline: "none",
-    flexShrink: 0,
-  },
-
-  micToggleIcon: {
-    fontSize: "16px",
-    lineHeight: 1,
-    flexShrink: 0,
-  },
-
-  micToggleTextWrap: {
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "flex-start",
-    gap: "1px",
-  },
-
-  micToggleLabel: {
-    fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "12px",
-    fontWeight: 800,
-    letterSpacing: "0.01em",
-    lineHeight: 1.1,
-  },
-
-  micToggleState: {
-    fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    fontSize: "11px",
-    fontWeight: 650,
-    lineHeight: 1.1,
-  },
-
-  toggleTrack: {
-    position: "relative",
-    width: "38px",
-    height: "22px",
-    borderRadius: "999px",
-    flexShrink: 0,
-    transition: "background-color 200ms ease",
-    display: "inline-block",
-  },
-
-  toggleThumb: {
-    position: "absolute",
-    top: "2px",
-    width: "18px",
-    height: "18px",
-    borderRadius: "50%",
-    backgroundColor: COLORS.white,
-    boxShadow: "0 1px 4px rgba(0,0,0,0.28)",
-    transition: "transform 200ms ease",
-    display: "block",
   },
 
   linkBtn: {

@@ -149,12 +149,10 @@ async function exportTranscriptAsPdf({ sessionLabel, pdfName, entries }) {
 
       doc.setFillColor(...(idx % 2 === 0 ? [245, 252, 239] : [255, 255, 255]));
       doc.roundedRect(margin, y, contentW, blockH, 5, 5, "F");
-
       doc.setFont("helvetica", "bold");
       doc.setFontSize(9);
       doc.setTextColor(44, 177, 166);
       doc.text(speakerLine, margin + 12, y + 14);
-
       doc.setFont("helvetica", "normal");
       doc.setFontSize(11);
       doc.setTextColor(40, 40, 40);
